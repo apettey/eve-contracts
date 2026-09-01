@@ -1,0 +1,166 @@
+@namespace EveContracts.App.Components
+@implements IDisposable
+@inject UiState Ui
+@inject ContractQueryService Query
+@inject OwnContractSync OwnSync
+@inject EveContracts.Core.Esi.EsiAuthService Auth
+
+<div class="view">
+    <!-- Character rail -->
+    <aside class="rail">
+        <div class="rail-lbl">Characters</div>
+        <div class="char-row @(Ui.CharacterFilter is null ? "sel" : "")" @onclick="@(() => SelectChar(null))">
+            <span class="nm all">All characters</span>
+            <span class="cnt">@_totalCount</span>
+        </div>
+        @foreach (var ch in _chars)
+        {
+            <div class="char-row @(Ui.CharacterFilter == ch.CharacterId ? "sel" : "")"
+                 @key="ch.CharacterId" @onclick="@(() => SelectChar(ch.CharacterId))">
+                <div class="char-name-wrap">
+                    <span class="dot @(ch.Authed ? "ok" : "bad")"></span>
+                    <span class="nm">@ch.Name</span>
+                </div>
+                <span class="cnt">@(ch.Count > 0 ? ch.Count.ToString() : "·")</span>
+            </div>
+        }
+        @if (_expiredCount > 0)
+        {
+            <div class="rail-notice">@_expiredCount token@(_expiredCount == 1 ? "" : "s") expired — <a @onclick="ReAuth">re-auth via ESI</a> to resume contract sync.</div>
+        }
+        @if (_chars.Count == 0)
+        {
+            <div class="rail-notice">No characters yet — <a @onclick="ReAuth">add one via ESI login</a> (set your Client ID in ⚙ Settings first).</div>
+        }
+    </aside>
+
+    <div class="main-col">
+        <!-- Filters -->
+        <div class="own-filters">
+            @foreach (var d in DirOptions)
+            {
+                <button class="pill @(Ui.DirFilter == d ? "active" : "")" @onclick="@(() => SetDir(d))">@d</button>
+            }
+            <div class="vdivider"></div>
+            @foreach (var st in StatusOptions)
+            {
+                <button class="pill @(Ui.StatusFilter == st ? "active" : "")" @onclick="@(() => SetStatus(st))">@st</button>
+            }
+        </div>
+
+        <!-- Stats strip -->
+        <div class="stats">
+            <div class="stat">
+                <div class="lbl">Outstanding value</div>
+                <div class="val">@IskFormat.Short(_outstanding)</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Collateral at risk</div>
+                <div class="val amber">@IskFormat.Short(_collateral)</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Completed (30d)</div>
+                <div class="val green">@_completed30</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Expiring &lt; 24h</div>
+                <div class="val red">@_expiring24</div>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="tbl-wrap">
+            <div class="own-grid tbl-head" style="cursor:default;">
+                <span>Dir</span><span>Contract</span><span>Character</span><span>Other party</span>
+                <span class="r">Value</span><span class="r">Collateral</span><span class="r">Expires</span><span class="r">Status</span>
+            </div>
+            @if (_rows.Count == 0)
+            {
+                <div class="empty-state"><div>no contracts match the current filters</div></div>
+            }
+            <Virtualize Items="_rows" Context="oc" ItemSize="63" OverscanCount="10">
+                <div class="own-grid own-row" @key="oc.Id">
+                    <div><span class="badge @(oc.Dir == "OUT" ? "violet" : "green")">@oc.Dir</span></div>
+                    <div class="cell-title">
+                        <span class="t">@oc.Title</span>
+                        <span class="s">@oc.Type · @oc.Route</span>
+                    </div>
+                    <div style="font-size:12.5px;">@oc.Character</div>
+                    <div style="font-size:12.5px;" class="txt2">@oc.Party</div>
+                    <div class="r num">@IskFormat.Short(oc.Value)</div>
+                    <div class="r num dimtxt">@(oc.Collateral > 0 ? IskFormat.Short(oc.Collateral) : "—")</div>
+                    <div class="r num-sm"><span class="@ExpireClass(oc)">@ExpireText(oc)</span></div>
+                    <div style="display:flex; justify-content:flex-end;"><span class="badge @StatusClass(oc.Status)">@oc.Status</span></div>
+                </div>
+            </Virtualize>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static readonly string[] DirOptions = ["All", "Outbound", "Inbound"];
+    private static readonly string[] StatusOptions = ["All", "Outstanding", "In progress", "Finished", "Expired"];
+
+    private List<CharacterRow> _chars = [];
+    private List<OwnRow> _rows = [];
+    private int _totalCount, _expiredCount, _completed30, _expiring24;
+    private double _outstanding, _collateral;
+
+    protected override async Task OnInitializedAsync()
+    {
+        OwnSync.Updated += OnDataUpdated;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _chars = await Query.GetCharactersAsync();
+        _expiredCount = _chars.Count(c => !c.Authed);
+        _totalCount = _chars.Sum(c => c.Count);
+        _rows = await Query.GetOwnRowsAsync(Ui.CharacterFilter, Ui.DirFilter, Ui.StatusFilter);
+        (_outstanding, _collateral, _completed30, _expiring24) = await Query.GetOwnStatsAsync();
+        StateHasChanged();
+    }
+
+    private void OnDataUpdated() => _ = InvokeAsync(ReloadAsync);
+
+    private async Task SelectChar(int? id)
+    {
+        // Click again to clear, per the design spec.
+        Ui.CharacterFilter = Ui.CharacterFilter == id ? null : id;
+        await ReloadAsync();
+    }
+
+    private async Task SetDir(string d) { Ui.DirFilter = d; await ReloadAsync(); }
+    private async Task SetStatus(string s) { Ui.StatusFilter = s; await ReloadAsync(); }
+
+    private async Task ReAuth()
+    {
+        try { await Auth.AddCharacterAsync(); await OwnSync.SyncAllAsync(); await ReloadAsync(); }
+        catch { /* surfaced in Settings modal flow; rail link is best-effort */ }
+    }
+
+    private static string ExpireText(OwnRow oc)
+    {
+        if (oc.Status is "Finished" or "Expired" or "Rejected" or "Cancelled" or "Failed" or "Deleted") return "—";
+        return IskFormat.Expiry(oc.Expires, DateTime.UtcNow);
+    }
+
+    private static string ExpireClass(OwnRow oc)
+    {
+        var active = oc.Status is "Outstanding" or "In progress";
+        var soon = active && oc.Expires > DateTime.UtcNow && oc.Expires < DateTime.UtcNow.AddHours(24);
+        return soon ? "profit-neg" : "txt2";
+    }
+
+    private static string StatusClass(string status) => status switch
+    {
+        "Outstanding" => "violet",
+        "In progress" => "amber",
+        "Finished" => "green",
+        "Expired" or "Deleted" or "Cancelled" => "dim",
+        _ => "red",
+    };
+
+    public void Dispose() => OwnSync.Updated -= OnDataUpdated;
+}

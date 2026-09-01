@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#1a1817; color:#e8e4df; font-family:'IBM Plex Sans',sans-serif; }
+  a { color:oklch(0.78 0.14 275); text-decoration:none; }
+  a:hover { color:oklch(0.86 0.11 275); }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:#3a3733; border-radius:5px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+</style>
+</helmet>
+
+<div style="min-height:100vh; display:flex; flex-direction:column; background:#1a1817;">
+
+  <!-- Header -->
+  <header style="display:flex; align-items:center; gap:28px; padding:0 28px; height:60px; border-bottom:1px solid #2c2926; background:#1e1c1a; flex-shrink:0;">
+    <div style="display:flex; align-items:baseline; gap:10px;">
+      <span style="font-weight:700; font-size:16px; letter-spacing:0.08em;">CONTRACT TRACKER</span>
+      <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8a847c;">EVE ONLINE</span>
+    </div>
+    <nav style="display:flex; gap:4px; height:100%;">
+      <button onClick="{{ goScanner }}" style="{{ tabScannerStyle }}" style-hover="color:#e8e4df;">Profit Scanner</button>
+      <button onClick="{{ goOwn }}" style="{{ tabOwnStyle }}" style-hover="color:#e8e4df;">Our Contracts</button>
+    </nav>
+    <div style="margin-left:auto; display:flex; align-items:center; gap:16px;">
+      <div style="display:flex; align-items:center; gap:8px; font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8a847c;">
+        <span style="width:7px; height:7px; border-radius:50%; background:oklch(0.75 0.13 155);"></span>
+        <span>ESI · last scan {{ lastScan }}</span>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8a847c; border:1px solid #2c2926; border-radius:4px; padding:5px 10px;">{{ authedCount }}/12 characters authed</div>
+    </div>
+  </header>
+
+  <!-- ============ PROFIT SCANNER ============ -->
+  <sc-if value="{{ showScanner }}" hint-placeholder-val="{{ true }}">
+  <div style="display:flex; flex:1; min-height:0;">
+
+    <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+
+      <!-- Filter bar -->
+      <div style="display:flex; align-items:flex-end; gap:22px; padding:16px 28px; border-bottom:1px solid #2c2926; flex-wrap:wrap;">
+        <div style="display:flex; flex-direction:column; gap:5px;">
+          <label style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Region</label>
+          <select value="{{ region }}" onChange="{{ setRegion }}" style="background:#242220; border:1px solid #3a3733; color:#e8e4df; border-radius:4px; padding:7px 10px; font-family:'IBM Plex Sans',sans-serif; font-size:13px;">
+            <option value="The Forge">The Forge</option>
+            <option value="Domain">Domain</option>
+            <option value="Sinq Laison">Sinq Laison</option>
+            <option value="Heimatar">Heimatar</option>
+            <option value="Metropolis">Metropolis</option>
+          </select>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:5px;">
+          <label style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Min profit %</label>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <input type="range" min="0" max="50" value="{{ minMargin }}" onChange="{{ setMinMargin }}" style="width:110px; accentColor:oklch(0.72 0.16 275);">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:13px; width:36px;">{{ minMargin }}%</span>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:5px;">
+          <label style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Min Jita volume /day</label>
+          <input type="number" value="{{ minVolume }}" onChange="{{ setMinVolume }}" style="background:#242220; border:1px solid #3a3733; color:#e8e4df; border-radius:4px; padding:7px 10px; width:80px; font-family:'IBM Plex Mono',monospace; font-size:13px;">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:5px;">
+          <label style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Max contract price</label>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <input type="range" min="50" max="2000" step="50" value="{{ maxPriceM }}" onChange="{{ setMaxPrice }}" style="width:110px; accentColor:oklch(0.72 0.16 275);">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:13px; width:52px;">{{ maxPriceLabel }}</span>
+          </div>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#b5afa7; cursor:pointer; padding-bottom:6px;">
+          <input type="checkbox" checked="{{ highsecOnly }}" onChange="{{ toggleHighsec }}" style="accentColor:oklch(0.72 0.16 275);">
+          Highsec only
+        </label>
+        <div style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8a847c; padding-bottom:6px;">ships + modules only · minerals/gas excluded · purged 3d after completion/expiry</div>
+      </div>
+
+      <!-- Stats strip -->
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:#2c2926; border-bottom:1px solid #2c2926;">
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Contracts scanned</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px;">{{ scannedCount }}</div>
+        </div>
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Passed filters</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px; color:oklch(0.72 0.16 275);">{{ passedCount }}</div>
+        </div>
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Best net profit</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px; color:oklch(0.75 0.13 155);">{{ bestProfit }}</div>
+        </div>
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Total opportunity</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px;">{{ totalOpportunity }}</div>
+        </div>
+      </div>
+
+      <!-- Contract table -->
+      <div style="flex:1; overflow:auto;">
+        <div style="display:grid; grid-template-columns:minmax(200px,1.6fr) 1fr 90px 90px 90px 90px 70px 80px; gap:14px; padding:10px 28px; font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase; border-bottom:1px solid #2c2926; position:sticky; top:0; background:#1a1817;">
+          <span>Contract</span><span>Location</span><span style="text-align:right;">Sec / Jumps</span><span style="text-align:right;">Ask price</span><span style="text-align:right;">Jita sell val</span><span style="text-align:right;">Net profit</span><span style="text-align:right;">Margin</span><span style="text-align:right;">Verdict</span>
+        </div>
+        <sc-for list="{{ scannerRows }}" as="row" hint-placeholder-count="6">
+          <div onClick="{{ row.select }}" style="{{ row.rowStyle }}" style-hover="background:#242220;">
+            <div style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+              <span style="font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ row.title }}</span>
+              <span style="font-size:11.5px; color:#8a847c;">{{ row.itemsSummary }}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:2px; font-size:12.5px;">
+              <span>{{ row.system }}</span>
+              <span style="font-size:11px; color:#8a847c;">{{ row.station }}</span>
+            </div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:12.5px;"><span style="{{ row.secStyle }}">{{ row.sec }}</span><span style="color:#8a847c;"> · {{ row.jumps }}j</span></div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:13px;">{{ row.price }}</div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#b5afa7;">{{ row.sellVal }}</div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600;"><span style="{{ row.profitStyle }}">{{ row.profit }}</span></div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:13px;"><span style="{{ row.profitStyle }}">{{ row.margin }}</span></div>
+            <div style="display:flex; justify-content:flex-end;"><span style="{{ row.verdictStyle }}">{{ row.verdict }}</span></div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- Detail panel -->
+    <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ true }}">
+    <aside style="width:400px; flex-shrink:0; border-left:1px solid #2c2926; background:#1e1c1a; display:flex; flex-direction:column; overflow:auto;">
+      <div style="padding:20px 22px 16px; border-bottom:1px solid #2c2926;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+          <div>
+            <div style="font-size:15px; font-weight:700;">{{ sel.title }}</div>
+            <div style="font-size:12px; color:#8a847c; margin-top:3px;">{{ sel.system }} · {{ sel.station }} · expires {{ sel.expires }}</div>
+          </div>
+          <button onClick="{{ clearSelection }}" style="background:none; border:none; color:#8a847c; font-size:16px; cursor:pointer; padding:2px 6px;" style-hover="color:#e8e4df;">✕</button>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <sc-for list="{{ sel.flags }}" as="flag" hint-placeholder-count="2">
+            <span style="{{ flag.style }}">{{ flag.label }}</span>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="padding:16px 22px; border-bottom:1px solid #2c2926;">
+        <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase; margin-bottom:10px;">Items vs Jita</div>
+        <div style="display:flex; flex-direction:column; gap:1px; background:#2c2926; border-radius:6px; overflow:hidden;">
+          <div style="display:grid; grid-template-columns:1fr 76px 76px 60px; gap:8px; padding:8px 12px; background:#242220; font-size:10px; letter-spacing:0.08em; color:#8a847c; text-transform:uppercase;">
+            <span>Item</span><span style="text-align:right;">Jita sell</span><span style="text-align:right;">Jita buy</span><span style="text-align:right;">Vol/d</span>
+          </div>
+          <sc-for list="{{ sel.items }}" as="it" hint-placeholder-count="3">
+            <div style="display:grid; grid-template-columns:1fr 76px 76px 60px; gap:8px; padding:9px 12px; background:#1e1c1a; align-items:center;">
+              <div style="min-width:0;">
+                <div style="font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ it.name }}</div>
+                <div style="font-size:10.5px; color:#8a847c;">×{{ it.qty }} · {{ it.m3 }} m³</div>
+              </div>
+              <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:12px;">{{ it.sell }}</div>
+              <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:12px; color:#8a847c;">{{ it.buy }}</div>
+              <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:12px;"><span style="{{ it.volStyle }}">{{ it.vol }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="padding:16px 22px;">
+        <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase; margin-bottom:10px;">Profit breakdown</div>
+        <div style="display:flex; flex-direction:column; gap:8px; font-size:13px;">
+          <div style="display:flex; justify-content:space-between;"><span style="color:#b5afa7;">Jita sell value</span><span style="font-family:'IBM Plex Mono',monospace;">{{ sel.sellVal }}</span></div>
+          <div style="display:flex; justify-content:space-between;"><span style="color:#b5afa7;">Contract price</span><span style="font-family:'IBM Plex Mono',monospace;">−{{ sel.price }}</span></div>
+          <div style="display:flex; justify-content:space-between;"><span style="color:#b5afa7;">Sales tax + broker (4.5%)</span><span style="font-family:'IBM Plex Mono',monospace;">−{{ sel.fees }}</span></div>
+          <div style="display:flex; justify-content:space-between;"><span style="color:#b5afa7;">Hauling {{ sel.m3 }} m³ · {{ sel.jumps }} jumps</span><span style="font-family:'IBM Plex Mono',monospace;">−{{ sel.hauling }}</span></div>
+          <div style="height:1px; background:#2c2926; margin:2px 0;"></div>
+          <div style="display:flex; justify-content:space-between; font-weight:700;"><span>Net profit</span><span style="font-family:'IBM Plex Mono',monospace;"><span style="{{ sel.profitStyle }}">{{ sel.profit }} ({{ sel.margin }})</span></span></div>
+          <div style="display:flex; justify-content:space-between; font-size:12px; color:#8a847c;"><span>Est. time to liquidate</span><span style="font-family:'IBM Plex Mono',monospace;">{{ sel.liquidate }}</span></div>
+        </div>
+      </div>
+    </aside>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- ============ OUR CONTRACTS ============ -->
+  <sc-if value="{{ showOwn }}" hint-placeholder-val="{{ false }}">
+  <div style="display:flex; flex:1; min-height:0;">
+
+    <!-- Character rail -->
+    <aside style="width:250px; flex-shrink:0; border-right:1px solid #2c2926; background:#1e1c1a; overflow:auto; padding:14px 0;">
+      <div style="padding:0 18px 10px; font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Characters</div>
+      <div onClick="{{ selectAllChars }}" style="{{ allCharsStyle }}" style-hover="background:#242220;">
+        <span style="font-size:13px; font-weight:600;">All characters</span>
+        <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8a847c;">{{ totalOwnCount }}</span>
+      </div>
+      <sc-for list="{{ charRows }}" as="ch" hint-placeholder-count="8">
+        <div onClick="{{ ch.select }}" style="{{ ch.style }}" style-hover="background:#242220;">
+          <div style="display:flex; align-items:center; gap:9px; min-width:0;">
+            <span style="{{ ch.dotStyle }}"></span>
+            <span style="font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ ch.name }}</span>
+          </div>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8a847c;">{{ ch.count }}</span>
+        </div>
+      </sc-for>
+      <div style="margin:14px 18px 4px; padding:10px 12px; border:1px dashed #3a3733; border-radius:6px; font-size:11.5px; color:#8a847c; line-height:1.5;">2 tokens expired — re-auth via ESI to resume contract sync.</div>
+    </aside>
+
+    <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
+      <!-- Own filters -->
+      <div style="display:flex; align-items:center; gap:10px; padding:14px 28px; border-bottom:1px solid #2c2926;">
+        <sc-for list="{{ dirTabs }}" as="dt" hint-placeholder-count="3">
+          <button onClick="{{ dt.select }}" style="{{ dt.style }}" style-hover="border-color:#5a554e;">{{ dt.label }}</button>
+        </sc-for>
+        <div style="width:1px; height:20px; background:#2c2926; margin:0 6px;"></div>
+        <sc-for list="{{ statusTabs }}" as="st" hint-placeholder-count="4">
+          <button onClick="{{ st.select }}" style="{{ st.style }}" style-hover="border-color:#5a554e;">{{ st.label }}</button>
+        </sc-for>
+      </div>
+
+      <!-- Own stats -->
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:#2c2926; border-bottom:1px solid #2c2926;">
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Outstanding value</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px;">{{ ownOutstandingVal }}</div>
+        </div>
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Collateral at risk</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px; color:oklch(0.75 0.15 60);">{{ ownCollateral }}</div>
+        </div>
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Completed (30d)</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px; color:oklch(0.75 0.13 155);">{{ ownCompleted }}</div>
+        </div>
+        <div style="background:#1e1c1a; padding:14px 28px;">
+          <div style="font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase;">Expiring &lt; 24h</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; margin-top:4px; color:oklch(0.72 0.16 25);">{{ ownExpiring }}</div>
+        </div>
+      </div>
+
+      <!-- Own table -->
+      <div style="flex:1; overflow:auto;">
+        <div style="display:grid; grid-template-columns:70px minmax(180px,1.5fr) 1fr 1fr 90px 90px 80px 100px; gap:14px; padding:10px 28px; font-size:10px; letter-spacing:0.1em; color:#8a847c; text-transform:uppercase; border-bottom:1px solid #2c2926; position:sticky; top:0; background:#1a1817;">
+          <span>Dir</span><span>Contract</span><span>Character</span><span>Other party</span><span style="text-align:right;">Value</span><span style="text-align:right;">Collateral</span><span style="text-align:right;">Expires</span><span style="text-align:right;">Status</span>
+        </div>
+        <sc-for list="{{ ownRows }}" as="oc" hint-placeholder-count="8">
+          <div style="display:grid; grid-template-columns:70px minmax(180px,1.5fr) 1fr 1fr 90px 90px 80px 100px; gap:14px; padding:13px 28px; border-bottom:1px solid #242220; align-items:center;" style-hover="background:#242220;">
+            <div><span style="{{ oc.dirStyle }}">{{ oc.dir }}</span></div>
+            <div style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+              <span style="font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ oc.title }}</span>
+              <span style="font-size:11.5px; color:#8a847c;">{{ oc.type }} · {{ oc.route }}</span>
+            </div>
+            <div style="font-size:12.5px;">{{ oc.character }}</div>
+            <div style="font-size:12.5px; color:#b5afa7;">{{ oc.party }}</div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:13px;">{{ oc.value }}</div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#8a847c;">{{ oc.collateral }}</div>
+            <div style="text-align:right; font-family:'IBM Plex Mono',monospace; font-size:12.5px;"><span style="{{ oc.expireStyle }}">{{ oc.expires }}</span></div>
+            <div style="display:flex; justify-content:flex-end;"><span style="{{ oc.statusStyle }}">{{ oc.status }}</span></div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;feePct&quot;: {&quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 4.5, &quot;min&quot;: 0, &quot;max&quot;: 10, &quot;step&quot;: 0.5, &quot;unit&quot;: &quot;%&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Profit model&quot;}, &quot;haulRate&quot;: {&quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 800, &quot;min&quot;: 0, &quot;max&quot;: 5000, &quot;unit&quot;: &quot; ISK/m³&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Profit model&quot;}}">
+class Component extends DCLogic {
+  state = {
+    tab: 'scanner', selId: 3, region: 'The Forge',
+    minMargin: 10, minVolume: 20, maxPriceM: 800, highsecOnly: true,
+    charFilter: null, dirFilter: 'All', statusFilter: 'All',
+  };
+
+  fmt(n) { // ISK short format
+    const abs = Math.abs(n), sign = n < 0 ? '−' : '';
+    if (abs >= 1e9) return sign + (abs / 1e9).toFixed(2) + 'B';
+    if (abs >= 1e6) return sign + (abs / 1e6).toFixed(1) + 'M';
+    if (abs >= 1e3) return sign + (abs / 1e3).toFixed(0) + 'K';
+    return sign + abs.toFixed(0);
+  }
+
+  get publicContracts() {
+    return [
+      { id: 1, title: 'Gila — Pith C-Type fit', system: 'Jita', station: 'Jita IV-4 CNAP', sec: 0.9, jumps: 0, price: 385e6, expires: '2d 4h',
+        items: [
+          { name: 'Gila', qty: 1, sell: 312e6, buy: 289e6, vol: 84, m3: 10000 },
+          { name: 'Pith C-Type Large Shield Booster', qty: 1, sell: 98e6, buy: 84e6, vol: 41, m3: 5 },
+          { name: 'Rapid Light Missile Launcher II', qty: 5, sell: 4.1e6, buy: 3.4e6, vol: 310, m3: 5 },
+        ]},
+      { id: 2, title: 'Praxis hull, clean', system: 'Amarr', station: 'Amarr VIII EFA', sec: 1.0, jumps: 9, price: 58e6,  expires: '5d 12h',
+        items: [ { name: 'Praxis', qty: 1, sell: 74e6, buy: 66e6, vol: 62, m3: 50000 } ]},
+      { id: 3, title: 'Ishtar + T2 rigs', system: 'Perimeter', station: 'Perimeter TTT', sec: 0.9, jumps: 1, price: 298e6, expires: '1d 9h',
+        items: [
+          { name: 'Ishtar', qty: 1, sell: 341e6, buy: 318e6, vol: 57, m3: 10000 },
+          { name: 'Medium Capacitor Control Circuit II', qty: 3, sell: 9.8e6, buy: 8.1e6, vol: 96, m3: 5 },
+        ]},
+      { id: 4, title: 'Deadspace shield bundle', system: 'Jita', station: 'Jita IV-4 CNAP', sec: 0.9, jumps: 0, price: 612e6, expires: '3d 1h',
+        items: [
+          { name: 'Gist X-Type Shield Boost Amplifier', qty: 2, sell: 189e6, buy: 164e6, vol: 22, m3: 5 },
+          { name: 'Pith B-Type EM Shield Hardener', qty: 2, sell: 152e6, buy: 131e6, vol: 18, m3: 5 },
+        ]},
+      { id: 5, title: 'Muninn fleet fit ×3', system: 'Hek', station: 'Hek VIII Boundless', sec: 0.5, jumps: 12, price: 890e6, expires: '6d 2h',
+        items: [ { name: 'Muninn', qty: 3, sell: 318e6, buy: 296e6, vol: 38, m3: 30000 } ]},
+      { id: 6, title: 'Officer mod — Draclira\u2019s', system: 'Ashab', station: 'Ashab I Emperor', sec: 0.9, jumps: 8, price: 1.45e9, expires: '12h',
+        items: [ { name: 'Draclira\u2019s Modified Heat Sink', qty: 1, sell: 1.61e9, buy: 1.38e9, vol: 3, m3: 5 } ]},
+      { id: 7, title: 'Vexor Navy Issue, rigged', system: 'Dodixie', station: 'Dodixie IX-20 FN', sec: 0.9, jumps: 14, price: 118e6, expires: '2d 18h',
+        items: [ { name: 'Vexor Navy Issue', qty: 1, sell: 129e6, buy: 121e6, vol: 112, m3: 10000 } ]},
+      { id: 8, title: '\u2605 Cheap Golem, quick sale', system: 'Uedama', station: 'Uedama SCC', sec: 0.5, jumps: 6, price: 1.72e9, expires: '8h',
+        items: [ { name: 'Golem', qty: 1, sell: 1.94e9, buy: 1.81e9, vol: 11, m3: 50000 } ]},
+      { id: 9, title: 'Tayra + mixed mods', system: 'Rancer', station: 'Rancer VII-2', sec: 0.4, jumps: 11, price: 22e6, expires: '4d',
+        items: [ { name: 'Tayra', qty: 1, sell: 9.8e6, buy: 8.2e6, vol: 210, m3: 20000 },
+                 { name: '10MN Afterburner II', qty: 4, sell: 2.9e6, buy: 2.3e6, vol: 480, m3: 5 } ]},
+      { id: 10, title: 'Orthrus, abyssal fit', system: 'Jita', station: 'Jita IV-4 CNAP', sec: 0.9, jumps: 0, price: 512e6, expires: '1d 2h',
+        items: [ { name: 'Orthrus', qty: 1, sell: 498e6, buy: 462e6, vol: 29, m3: 10000 } ]},
+    ];
+  }
+
+  get characters() {
+    return [
+      { name: 'Kestrel Vane', authed: true, count: 6 }, { name: 'Mira Solette', authed: true, count: 4 },
+      { name: 'Dax Orlan', authed: true, count: 3 }, { name: 'Torvald Rask', authed: true, count: 5 },
+      { name: 'Yuna Praxis', authed: true, count: 2 }, { name: 'Ilsa Vex', authed: true, count: 1 },
+      { name: 'Cort Ashen', authed: true, count: 3 }, { name: 'Renna Hale', authed: true, count: 0 },
+      { name: 'Bram Kestrel', authed: true, count: 2 }, { name: 'Sova Thane', authed: true, count: 1 },
+      { name: 'Ardin Malec', authed: false, count: 0 }, { name: 'Nyx Corvale', authed: false, count: 0 },
+    ];
+  }
+
+  get ownContracts() {
+    return [
+      { dir: 'OUT', title: 'Ishtar ratting fit', type: 'Item Exchange', route: 'Jita IV-4', character: 'Kestrel Vane', party: 'Public', value: 335e6, collateral: 0, hours: 96, status: 'Outstanding' },
+      { dir: 'OUT', title: 'Fuel blocks ×12,000', type: 'Courier', route: 'Jita → C4 staging', character: 'Torvald Rask', party: 'Red Frog Freight', value: 18e6, collateral: 210e6, hours: 20, status: 'In progress' },
+      { dir: 'IN', title: 'Doctrine Muninn ×2', type: 'Item Exchange', route: 'Hek VIII', character: 'Mira Solette', party: 'Frostline Syndicate', value: 640e6, collateral: 0, hours: 41, status: 'Outstanding' },
+      { dir: 'OUT', title: 'Corp hangar move', type: 'Courier', route: 'Amarr → Jita', character: 'Dax Orlan', party: 'PushX', value: 42e6, collateral: 1.2e9, hours: 12, status: 'In progress' },
+      { dir: 'IN', title: 'Gila abyssal package', type: 'Item Exchange', route: 'Jita IV-4', character: 'Kestrel Vane', party: 'Aldo Renn', value: 410e6, collateral: 0, hours: 8, status: 'Outstanding' },
+      { dir: 'OUT', title: 'Salvage lot (rigs, T2)', type: 'Auction', route: 'Dodixie IX-20', character: 'Yuna Praxis', party: 'Public', value: 96e6, collateral: 0, hours: 62, status: 'Outstanding' },
+      { dir: 'OUT', title: 'Orca + fittings', type: 'Item Exchange', route: 'Jita IV-4', character: 'Cort Ashen', party: 'Public', value: 2.1e9, collateral: 0, hours: 140, status: 'Outstanding' },
+      { dir: 'IN', title: 'Ammo resupply', type: 'Courier', route: 'Jita → Hek', character: 'Bram Kestrel', party: 'Frostline Syndicate', value: 8e6, collateral: 95e6, hours: 0, status: 'Finished' },
+      { dir: 'OUT', title: 'PI materials batch', type: 'Item Exchange', route: 'Dodixie IX-20', character: 'Sova Thane', party: 'Public', value: 54e6, collateral: 0, hours: 0, status: 'Expired' },
+      { dir: 'IN', title: 'Loki doctrine hull', type: 'Item Exchange', route: 'Jita IV-4', character: 'Ilsa Vex', party: 'Kell Dessik', value: 388e6, collateral: 0, hours: 0, status: 'Finished' },
+      { dir: 'OUT', title: 'Moon goo haul', type: 'Courier', route: 'Osmon → Jita', character: 'Torvald Rask', party: 'Public', value: 25e6, collateral: 480e6, hours: 71, status: 'Outstanding' },
+      { dir: 'IN', title: 'Blueprint copies (Raven)', type: 'Item Exchange', route: 'Jita IV-4', character: 'Mira Solette', party: 'Public', value: 61e6, collateral: 0, hours: 0, status: 'Rejected' },
+    ];
+  }
+
+  evalContract(c) {
+    const taxRate = (this.props.feePct ?? 4.5) / 100;
+    const haulRate = this.props.haulRate ?? 800; // ISK per m3
+    const sellVal = c.items.reduce((s, it) => s + it.sell * it.qty, 0);
+    const m3 = c.items.reduce((s, it) => s + it.m3 * it.qty, 0);
+    const fees = sellVal * taxRate;
+    const hauling = c.jumps === 0 ? 0 : m3 * haulRate * (0.5 + c.jumps / 10);
+    const profit = sellVal - c.price - fees - hauling;
+    const margin = profit / c.price;
+    const lowVol = c.items.some(it => it.vol < this.state.minVolume);
+    const lowsec = c.sec < 0.5;
+    let verdict = 'BUY';
+    if (lowsec) verdict = 'LOWSEC';
+    else if (profit <= 0) verdict = 'SKIP';
+    else if (lowVol) verdict = 'LOW VOL';
+    else if (margin < this.state.minMargin / 100) verdict = 'THIN';
+    return { sellVal, m3, fees, hauling, profit, margin, lowVol, lowsec, verdict };
+  }
+
+  badge(color, bg) {
+    return { fontFamily: "'IBM Plex Mono',monospace", fontSize: '10px', fontWeight: 600, letterSpacing: '0.06em', padding: '3px 8px', borderRadius: '4px', color, background: bg, whiteSpace: 'nowrap' };
+  }
+
+  renderVals() {
+    const s = this.state;
+    const green = 'oklch(0.75 0.13 155)', red = 'oklch(0.68 0.17 25)', amber = 'oklch(0.78 0.13 85)', violet = 'oklch(0.72 0.16 275)', dim = '#8a847c';
+    const tabStyle = (on) => ({ background: 'none', border: 'none', borderBottom: on ? '2px solid ' + violet : '2px solid transparent', color: on ? '#e8e4df' : dim, fontFamily: "'IBM Plex Sans',sans-serif", fontSize: '13.5px', fontWeight: 600, padding: '0 14px', cursor: 'pointer', height: '100%' });
+
+    const verdictColors = { 'BUY': [green, 'oklch(0.75 0.13 155 / 0.12)'], 'THIN': [amber, 'oklch(0.78 0.13 85 / 0.12)'], 'LOW VOL': [dim, '#242220'], 'SKIP': [red, 'oklch(0.68 0.17 25 / 0.10)'], 'LOWSEC': [red, 'oklch(0.68 0.17 25 / 0.10)'] };
+
+    const evaluated = this.publicContracts.map(c => ({ c, e: this.evalContract(c) }))
+      .filter(({ c }) => c.price <= s.maxPriceM * 1e6)
+      .filter(({ c }) => !s.highsecOnly || c.sec >= 0.5)
+      .sort((a, b) => b.e.profit - a.e.profit);
+
+    const passed = evaluated.filter(x => x.e.verdict === 'BUY');
+    const selEntry = evaluated.find(x => x.c.id === s.selId) || null;
+
+    const scannerRows = evaluated.map(({ c, e }) => ({
+      title: c.title,
+      itemsSummary: c.items.map(it => (it.qty > 1 ? it.qty + '× ' : '') + it.name).join(', '),
+      system: c.system, station: c.station,
+      sec: c.sec.toFixed(1), jumps: c.jumps,
+      secStyle: { color: c.sec >= 0.5 ? green : red },
+      price: this.fmt(c.price), sellVal: this.fmt(e.sellVal),
+      profit: (e.profit >= 0 ? '+' : '') + this.fmt(e.profit),
+      margin: (e.margin * 100).toFixed(1) + '%',
+      profitStyle: { color: e.profit > 0 ? green : red },
+      verdict: e.verdict,
+      verdictStyle: this.badge(...verdictColors[e.verdict]),
+      rowStyle: { display: 'grid', gridTemplateColumns: 'minmax(200px,1.6fr) 1fr 90px 90px 90px 90px 70px 80px', gap: '14px', padding: '13px 28px', borderBottom: '1px solid #242220', alignItems: 'center', cursor: 'pointer', background: c.id === s.selId ? '#26232e' : 'transparent' },
+      select: () => this.setState({ selId: c.id }),
+    }));
+
+    let sel = null;
+    if (selEntry) {
+      const { c, e } = selEntry;
+      const flags = [];
+      if (e.verdict === 'BUY') flags.push({ label: '✓ PASSES ALL FILTERS', style: this.badge(green, 'oklch(0.75 0.13 155 / 0.12)') });
+      if (e.lowVol) flags.push({ label: '⚠ ITEM BELOW VOLUME FLOOR', style: this.badge(amber, 'oklch(0.78 0.13 85 / 0.12)') });
+      if (e.lowsec) flags.push({ label: '⚠ LOWSEC PICKUP', style: this.badge(red, 'oklch(0.68 0.17 25 / 0.10)') });
+      if (c.expires.includes('h') && !c.expires.includes('d')) flags.push({ label: '⏱ EXPIRES SOON', style: this.badge(amber, 'oklch(0.78 0.13 85 / 0.12)') });
+      if (c.title.includes('★') || c.title.toLowerCase().includes('cheap')) flags.push({ label: '⚑ SCAM PATTERN IN TITLE', style: this.badge(red, 'oklch(0.68 0.17 25 / 0.10)') });
+      const worstVol = Math.min(...c.items.map(it => it.vol));
+      sel = {
+        title: c.title, system: c.system, station: c.station, expires: c.expires,
+        flags,
+        items: c.items.map(it => ({ name: it.name, qty: it.qty, m3: (it.m3 * it.qty).toLocaleString(), sell: this.fmt(it.sell), buy: this.fmt(it.buy), vol: it.vol, volStyle: { color: it.vol < s.minVolume ? red : '#e8e4df' } })),
+        sellVal: this.fmt(e.sellVal), price: this.fmt(c.price), fees: this.fmt(e.fees),
+        hauling: e.hauling ? this.fmt(e.hauling) : '0', m3: e.m3.toLocaleString(), jumps: c.jumps,
+        profit: (e.profit >= 0 ? '+' : '') + this.fmt(e.profit), margin: (e.margin * 100).toFixed(1) + '%',
+        profitStyle: { color: e.profit > 0 ? green : red },
+        liquidate: worstVol > 100 ? '&lt; 1 day' : worstVol > 30 ? '1–3 days' : '3–7 days',
+      };
+      sel.liquidate = worstVol > 100 ? '< 1 day' : worstVol > 30 ? '1–3 days' : '3–7 days';
+    }
+
+    // own contracts
+    const dirMap = { 'All': null, 'Outbound': 'OUT', 'Inbound': 'IN' };
+    const own = this.ownContracts
+      .filter(o => !s.charFilter || o.character === s.charFilter)
+      .filter(o => !dirMap[s.dirFilter] || o.dir === dirMap[s.dirFilter])
+      .filter(o => s.statusFilter === 'All' || o.status === s.statusFilter);
+
+    const statusColors = { 'Outstanding': [violet, 'oklch(0.72 0.16 275 / 0.12)'], 'In progress': [amber, 'oklch(0.78 0.13 85 / 0.12)'], 'Finished': [green, 'oklch(0.75 0.13 155 / 0.12)'], 'Expired': [dim, '#242220'], 'Rejected': [red, 'oklch(0.68 0.17 25 / 0.10)'] };
+    const ownRows = own.map(o => ({
+      dir: o.dir, title: o.title, type: o.type, route: o.route, character: o.character, party: o.party,
+      value: this.fmt(o.value), collateral: o.collateral ? this.fmt(o.collateral) : '—',
+      expires: o.hours === 0 ? '—' : o.hours < 24 ? o.hours + 'h' : Math.floor(o.hours / 24) + 'd ' + (o.hours % 24) + 'h',
+      expireStyle: { color: o.hours > 0 && o.hours < 24 ? red : '#b5afa7' },
+      dirStyle: this.badge(o.dir === 'OUT' ? violet : green, o.dir === 'OUT' ? 'oklch(0.72 0.16 275 / 0.12)' : 'oklch(0.75 0.13 155 / 0.12)'),
+      status: o.status, statusStyle: this.badge(...statusColors[o.status]),
+    }));
+
+    const active = this.ownContracts.filter(o => o.status === 'Outstanding' || o.status === 'In progress');
+    const pill = (on) => ({ background: on ? '#26232e' : 'transparent', border: '1px solid ' + (on ? violet : '#3a3733'), color: on ? '#e8e4df' : dim, borderRadius: '99px', padding: '5px 13px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', fontFamily: "'IBM Plex Sans',sans-serif" });
+    const charRowStyle = (on) => ({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '9px 18px', cursor: 'pointer', background: on ? '#26232e' : 'transparent', borderLeft: on ? '2px solid ' + violet : '2px solid transparent' });
+
+    return {
+      showScanner: s.tab === 'scanner', showOwn: s.tab === 'own',
+      goScanner: () => this.setState({ tab: 'scanner' }), goOwn: () => this.setState({ tab: 'own' }),
+      tabScannerStyle: tabStyle(s.tab === 'scanner'), tabOwnStyle: tabStyle(s.tab === 'own'),
+      lastScan: '2 min ago', authedCount: this.characters.filter(c => c.authed).length,
+      region: s.region, setRegion: (e) => this.setState({ region: e.target.value }),
+      minMargin: s.minMargin, setMinMargin: (e) => this.setState({ minMargin: +e.target.value }),
+      minVolume: s.minVolume, setMinVolume: (e) => this.setState({ minVolume: +e.target.value }),
+      maxPriceM: s.maxPriceM, setMaxPrice: (e) => this.setState({ maxPriceM: +e.target.value }),
+      maxPriceLabel: s.maxPriceM >= 1000 ? (s.maxPriceM / 1000).toFixed(1) + 'B' : s.maxPriceM + 'M',
+      highsecOnly: s.highsecOnly, toggleHighsec: () => this.setState({ highsecOnly: !s.highsecOnly }),
+      scannedCount: 1284, passedCount: passed.length,
+      bestProfit: passed.length ? '+' + this.fmt(passed[0].e.profit) : '—',
+      totalOpportunity: '+' + this.fmt(passed.reduce((t, x) => t + x.e.profit, 0)),
+      scannerRows, hasSelection: !!sel, sel: sel || {}, clearSelection: () => this.setState({ selId: null }),
+      // own
+      charRows: this.characters.map(ch => ({
+        name: ch.name, count: ch.count || '·',
+        dotStyle: { width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0, background: ch.authed ? green : red },
+        style: charRowStyle(s.charFilter === ch.name),
+        select: () => this.setState({ charFilter: s.charFilter === ch.name ? null : ch.name }),
+      })),
+      allCharsStyle: { ...charRowStyle(!s.charFilter) },
+      selectAllChars: () => this.setState({ charFilter: null }),
+      totalOwnCount: this.ownContracts.length,
+      dirTabs: ['All', 'Outbound', 'Inbound'].map(d => ({ label: d, style: pill(s.dirFilter === d), select: () => this.setState({ dirFilter: d }) })),
+      statusTabs: ['All', 'Outstanding', 'In progress', 'Finished', 'Expired'].map(st => ({ label: st, style: pill(s.statusFilter === st), select: () => this.setState({ statusFilter: st }) })),
+      ownOutstandingVal: this.fmt(active.reduce((t, o) => t + o.value, 0)),
+      ownCollateral: this.fmt(active.reduce((t, o) => t + o.collateral, 0)),
+      ownCompleted: this.ownContracts.filter(o => o.status === 'Finished').length,
+      ownExpiring: this.ownContracts.filter(o => o.hours > 0 && o.hours < 24).length,
+      ownRows,
+    };
+  }
+}
+</script>
+</body>
+</html>

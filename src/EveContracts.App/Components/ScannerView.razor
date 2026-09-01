@@ -1,0 +1,218 @@
+@namespace EveContracts.App.Components
+@implements IDisposable
+@inject UiState Ui
+@inject ContractQueryService Query
+@inject PublicContractSync PublicSync
+@inject SettingsService Settings
+@inject SyncScheduler Scheduler
+
+<div class="view">
+    <div class="main-col">
+        <!-- Filter bar -->
+        <div class="filters">
+            <div class="fgroup">
+                <label class="flabel">Region</label>
+                <select value="@Ui.Region" @onchange="OnRegionChange">
+                    @foreach (var r in EveContracts.Core.Sde.SdeService.Regions.Keys)
+                    {
+                        <option value="@r">@r</option>
+                    }
+                </select>
+            </div>
+            <div class="fgroup">
+                <label class="flabel">Min profit %</label>
+                <div class="slider-row">
+                    <input type="range" min="0" max="50" value="@Ui.MinMargin" @oninput="OnMinMargin" />
+                    <span class="slider-val">@(Ui.MinMargin)%</span>
+                </div>
+            </div>
+            <div class="fgroup">
+                <label class="flabel">Min Jita volume /day</label>
+                <input type="number" value="@Ui.MinVolume" @onchange="OnMinVolume" />
+            </div>
+            <div class="fgroup">
+                <label class="flabel">Max contract price</label>
+                <div class="slider-row">
+                    <input type="range" min="50" max="2000" step="50" value="@Ui.MaxPriceM" @oninput="OnMaxPrice" />
+                    <span class="slider-val" style="min-width:52px">@MaxPriceLabel</span>
+                </div>
+            </div>
+            <label class="chk">
+                <input type="checkbox" checked="@Ui.HighsecOnly" @onchange="OnHighsec" />
+                Highsec only
+            </label>
+            <div class="filters-note">ships + modules only · minerals/gas excluded · purged 3d after completion/expiry</div>
+        </div>
+
+        <!-- Stats strip -->
+        <div class="stats">
+            <div class="stat">
+                <div class="lbl">Contracts scanned</div>
+                <div class="val">@_stats.Scanned.ToString("N0")</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Passed filters</div>
+                <div class="val violet">@_stats.Passed</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Best net profit</div>
+                <div class="val green">@(_stats.Passed > 0 ? IskFormat.Signed(_stats.BestProfit) : "—")</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Total opportunity</div>
+                <div class="val">@IskFormat.Signed(_stats.TotalOpportunity)</div>
+            </div>
+        </div>
+
+        <!-- Contract table -->
+        <div class="tbl-wrap">
+            <div class="scan-grid tbl-head">
+                <span>Contract</span><span>Location</span><span class="r">Sec / Jumps</span>
+                <span class="r">Ask price</span><span class="r">Jita sell val</span>
+                <span class="r">Net profit</span><span class="r">Margin</span><span class="r">Verdict</span>
+            </div>
+            @if (_rows.Count == 0)
+            {
+                <div class="empty-state">
+                    @if (!Scheduler.SdeReady)
+                    {
+                        <div>first run: downloading EVE static data…</div>
+                        <div>@Scheduler.Status</div>
+                    }
+                    else
+                    {
+                        <div>no contracts match the current filters</div>
+                        <div>@Scheduler.Status</div>
+                    }
+                </div>
+            }
+            <Virtualize Items="_rows" Context="row" ItemSize="63" OverscanCount="10">
+                <div class="scan-grid tbl-row @(Ui.SelectedContractId == row.ContractId ? "sel" : "")"
+                     @key="row.ContractId" @onclick="@(() => Select(row.ContractId))">
+                    <div class="cell-title">
+                        <span class="t">@row.Title</span>
+                        <span class="s">@row.ItemsSummary</span>
+                    </div>
+                    <div class="cell-loc">
+                        <span>@row.System</span>
+                        <span class="st">@row.Station</span>
+                    </div>
+                    <div class="r num-sm">
+                        <span class="@(row.Sec >= 0.45 ? "sec-hi" : "sec-lo")">@row.Sec.ToString("0.0")</span><span class="dimtxt"> · @(row.Jumps)j</span>
+                    </div>
+                    <div class="r num">@IskFormat.Short(row.Price)</div>
+                    <div class="r num txt2">@IskFormat.Short(row.SellVal)</div>
+                    <div class="r num bold"><span class="@(row.Profit > 0 ? "profit-pos" : "profit-neg")">@IskFormat.Signed(row.Profit)</span></div>
+                    <div class="r num"><span class="@(row.Profit > 0 ? "profit-pos" : "profit-neg")">@((row.Margin * 100).ToString("0.0"))%</span></div>
+                    <div style="display:flex; justify-content:flex-end;"><span class="badge @VerdictClass(row.Verdict)">@row.Verdict</span></div>
+                </div>
+            </Virtualize>
+        </div>
+    </div>
+
+    @if (_detail is not null)
+    {
+        <DetailPanel Detail="_detail" MinVolume="@Ui.MinVolume" FeePct="@Settings.FeePct" OnClose="ClearSelection" />
+    }
+</div>
+
+@code {
+    private List<ScannerRow> _rows = [];
+    private ScannerStats _stats = new(0, 0, 0, 0);
+    private ContractDetail? _detail;
+    private System.Threading.Timer? _debounce;
+
+    protected override async Task OnInitializedAsync()
+    {
+        PublicSync.Updated += OnDataUpdated;
+        await ReloadAsync();
+    }
+
+    private ScannerFilter Filter => new(Ui.Region, Ui.MinMargin, Ui.MinVolume, Ui.MaxPriceM * 1e6, Ui.HighsecOnly);
+
+    private async Task ReloadAsync()
+    {
+        (_rows, _stats) = await Query.GetScannerRowsAsync(Filter);
+        if (Ui.SelectedContractId is long id && _rows.All(r => r.ContractId != id))
+        {
+            Ui.SelectedContractId = null;
+            _detail = null;
+        }
+        StateHasChanged();
+    }
+
+    private void OnDataUpdated() => _ = InvokeAsync(ReloadAsync);
+
+    // Sliders fire per-pixel; debounce the DB hit ~150 ms.
+    private void QueueReload()
+    {
+        _debounce?.Dispose();
+        _debounce = new System.Threading.Timer(_ => _ = InvokeAsync(ReloadAsync), null, 150, System.Threading.Timeout.Infinite);
+    }
+
+    private async Task OnRegionChange(ChangeEventArgs e)
+    {
+        Ui.Region = e.Value?.ToString() ?? "The Forge";
+        await Settings.SetAsync("region", Ui.Region);
+        await ReloadAsync();
+        _ = Scheduler.RescanNowAsync(); // new region needs a fetch; UI shows cached rows meanwhile
+    }
+
+    private void OnMinMargin(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v)) { Ui.MinMargin = v; QueueReload(); }
+    }
+
+    private void OnMinVolume(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), out var v))
+        {
+            Ui.MinVolume = v;
+            _ = Settings.SetAsync("min_daily_volume", v.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            // Volume floor is part of the persisted verdict; re-evaluate in the background.
+            _ = Task.Run(async () => { await PublicSync.EvaluateAllAsync(); OnDataUpdated(); });
+            QueueReload();
+        }
+    }
+
+    private void OnMaxPrice(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v)) { Ui.MaxPriceM = v; QueueReload(); }
+    }
+
+    private void OnHighsec(ChangeEventArgs e)
+    {
+        Ui.HighsecOnly = e.Value is bool b && b;
+        QueueReload();
+    }
+
+    private string MaxPriceLabel => Ui.MaxPriceM >= 1000 ? (Ui.MaxPriceM / 1000.0).ToString("0.0") + "B" : Ui.MaxPriceM + "M";
+
+    private async Task Select(long id)
+    {
+        Ui.SelectedContractId = id;
+        _detail = await Query.GetDetailAsync(id);
+        StateHasChanged();
+    }
+
+    private void ClearSelection()
+    {
+        Ui.SelectedContractId = null;
+        _detail = null;
+        StateHasChanged();
+    }
+
+    private static string VerdictClass(string v) => v switch
+    {
+        "BUY" => "buy",
+        "THIN" => "thin",
+        "LOW VOL" => "lowvol",
+        _ => "skip",
+    };
+
+    public void Dispose()
+    {
+        PublicSync.Updated -= OnDataUpdated;
+        _debounce?.Dispose();
+    }
+}

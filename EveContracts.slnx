@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EveContracts.App/EveContracts.App.csproj" />
+    <Project Path="src/EveContracts.Core/EveContracts.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EveContracts.Tests/EveContracts.Tests.csproj" />
+  </Folder>
+</Solution>

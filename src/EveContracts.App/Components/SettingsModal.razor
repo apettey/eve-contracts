@@ -1,0 +1,112 @@
+@namespace EveContracts.App.Components
+@inject UiState Ui
+@inject SettingsService Settings
+@inject EveContracts.Core.Esi.EsiAuthService Auth
+@inject OwnContractSync OwnSync
+@inject SyncScheduler Scheduler
+@inject EveContracts.Core.Sde.SdeService Sde
+
+<div class="modal-overlay" @onclick="Close">
+    <div class="modal" @onclick:stopPropagation="true">
+        <h2>SETTINGS</h2>
+
+        <div class="frow">
+            <label class="flabel">ESI application Client ID</label>
+            <input type="text" @bind="_clientId" placeholder="from developers.eveonline.com" />
+            <div class="hint">Register an application at developers.eveonline.com with callback URL
+                <span class="mono">http://localhost:8635/callback/</span> and scopes
+                <span class="mono">esi-contracts.read_character_contracts.v1 esi-universe.read_structures.v1</span>.</div>
+        </div>
+
+        <div class="frow">
+            <label class="flabel">Sales tax + broker fee %</label>
+            <input type="number" step="0.1" @bind="_feePct" style="width:100px" />
+        </div>
+
+        <div class="frow">
+            <label class="flabel">Haul rate (ISK per m³)</label>
+            <input type="number" @bind="_haulRate" style="width:100px" />
+        </div>
+
+        <div class="actions" style="justify-content:flex-start;">
+            <button class="btn" @onclick="AddCharacter" disabled="@_busy">Add character (ESI login)</button>
+            <button class="btn" @onclick="RescanNow" disabled="@_busy">Rescan public contracts</button>
+            <button class="btn" @onclick="RefreshSde" disabled="@_busy">Re-download static data</button>
+        </div>
+
+        @if (_error is not null) { <div class="err">@_error</div> }
+        @if (_msg is not null) { <div class="okmsg">@_msg</div> }
+
+        <div class="actions">
+            <button class="btn" @onclick="Close">Close</button>
+            <button class="btn primary" @onclick="Save">Save</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private string _clientId = "";
+    private double _feePct;
+    private double _haulRate;
+    private bool _busy;
+    private string? _error;
+    private string? _msg;
+
+    protected override void OnInitialized()
+    {
+        _clientId = Settings.EsiClientId;
+        _feePct = Settings.FeePct;
+        _haulRate = Settings.HaulRate;
+    }
+
+    private async Task Save()
+    {
+        await Settings.SetAsync("esi_client_id", _clientId.Trim());
+        await Settings.SetAsync("fee_pct", _feePct.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await Settings.SetAsync("haul_rate", _haulRate.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _msg = "Saved.";
+        _error = null;
+    }
+
+    private async Task AddCharacter()
+    {
+        _busy = true; _error = null; _msg = "Waiting for ESI login in your browser…";
+        StateHasChanged();
+        try
+        {
+            await Save();
+            var name = await Auth.AddCharacterAsync();
+            _msg = $"Authorized {name}. Syncing contracts…";
+            StateHasChanged();
+            await OwnSync.SyncAllAsync();
+            _msg = $"Authorized {name}.";
+        }
+        catch (Exception ex) { _error = ex.Message; _msg = null; }
+        finally { _busy = false; }
+    }
+
+    private async Task RescanNow()
+    {
+        _busy = true; _error = null; _msg = "Scanning…"; StateHasChanged();
+        try { await Scheduler.RescanNowAsync(); _msg = "Scan complete."; }
+        catch (Exception ex) { _error = ex.Message; _msg = null; }
+        finally { _busy = false; }
+    }
+
+    private async Task RefreshSde()
+    {
+        _busy = true; _error = null; _msg = "Downloading static data (this can take a few minutes)…"; StateHasChanged();
+        try { await Sde.DownloadAndLoadAsync(); _msg = "Static data refreshed."; }
+        catch (Exception ex) { _error = ex.Message; _msg = null; }
+        finally { _busy = false; }
+    }
+
+    private async Task Close()
+    {
+        Ui.SettingsOpen = false;
+        Ui.Notify();
+        await OnClosed.InvokeAsync();
+    }
+}
