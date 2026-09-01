@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Windows;
 using EveContracts.Core;
 using EveContracts.Core.Data;
@@ -14,6 +14,10 @@ namespace EveContracts.App;
 
 public partial class App : Application
 {
+    // CCP asks that ESI clients identify themselves with maintainer contact info in
+    // the User-Agent. If you fork this project, put YOUR contact details here.
+    private const string UserAgent = "EveContracts/1.0 (admin@pettey.me)";
+
     public static IHost AppHost { get; private set; } = null!;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -51,7 +55,7 @@ public partial class App : Application
 
                 services.AddHttpClient("esi", c =>
                 {
-                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "EveContracts/1.0 (admin@pettey.me)");
+                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
                     c.Timeout = TimeSpan.FromSeconds(60);
                 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
                 {
@@ -59,7 +63,7 @@ public partial class App : Application
                 });
                 services.AddHttpClient("fuzzwork", c =>
                 {
-                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "EveContracts/1.0 (admin@pettey.me)");
+                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
                     c.Timeout = TimeSpan.FromSeconds(120);
                 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
                 {
@@ -67,7 +71,7 @@ public partial class App : Application
                 });
                 services.AddHttpClient("sde", c =>
                 {
-                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "EveContracts/1.0 (admin@pettey.me)");
+                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
                     c.Timeout = TimeSpan.FromMinutes(10);
                 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
                 {
@@ -75,7 +79,7 @@ public partial class App : Application
                 });
                 services.AddHttpClient("sso", c =>
                 {
-                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "EveContracts/1.0 (admin@pettey.me)");
+                    c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
                 });
 
                 services.AddSingleton(sp => new EsiClient(
