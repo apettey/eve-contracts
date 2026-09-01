@@ -1,0 +1,124 @@
+# Reusable Windows desktop build for .NET apps.
+#
+# Call this from any repo owned by apettey (eve-contracts, hangarscope, multi-box):
+#
+#   jobs:
+#     build:
+#       uses: apettey/eve-contracts/.github/workflows/build-windows-app.yml@main
+#       with:
+#         project: src/MyApp/MyApp.csproj
+#         app-name: MyApp
+#
+# Produces a ready-to-run, self-contained win-x64 zip:
+#  - every run: uploaded as a workflow artifact
+#  - runs for a v* tag: attached to a GitHub Release for that tag
+name: Build Windows App
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: Path to the .csproj to publish
+        required: true
+        type: string
+      app-name:
+        description: Application name used for the zip / release asset
+        required: true
+        type: string
+      dotnet-version:
+        description: .NET SDK version
+        required: false
+        type: string
+        default: 10.0.x
+      runtime:
+        description: Publish runtime identifier
+        required: false
+        type: string
+        default: win-x64
+      self-contained:
+        description: Bundle the runtime so no .NET install is needed
+        required: false
+        type: boolean
+        default: true
+      test-project:
+        description: Optional test project to run before publishing (empty = skip)
+        required: false
+        type: string
+        default: ""
+      publish-args:
+        description: Extra arguments appended to dotnet publish
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write # release upload on tag builds
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Compute version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(?<v>\d+\.\d+\.\d+.*)$') {
+            $version = $Matches.v
+            $release = 'true'
+          } else {
+            $version = "0.0.0-ci.${{ github.run_number }}"
+            $release = 'false'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "release=$release" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version (release: $release)"
+
+      - name: Test
+        if: inputs.test-project != ''
+        run: dotnet test "${{ inputs.test-project }}" -c Release --nologo
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          dotnet publish "${{ inputs.project }}" `
+            -c Release `
+            -r ${{ inputs.runtime }} `
+            --self-contained ${{ inputs.self-contained }} `
+            -p:Version=${{ steps.version.outputs.version }} `
+            -o publish `
+            ${{ inputs.publish-args }}
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $zip = "${{ inputs.app-name }}-${{ steps.version.outputs.version }}-${{ inputs.runtime }}.zip"
+          Compress-Archive -Path publish\* -DestinationPath $zip
+          "ZIP_NAME=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-${{ inputs.runtime }}
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 30
+
+      - name: Release (tag builds)
+        if: steps.version.outputs.release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload '${{ github.ref_name }}' $env:ZIP_NAME --clobber --repo '${{ github.repository }}'
+          } else {
+            gh release create '${{ github.ref_name }}' $env:ZIP_NAME `
+              --repo '${{ github.repository }}' `
+              --title '${{ inputs.app-name }} ${{ github.ref_name }}' `
+              --generate-notes
+          }
