@@ -141,15 +141,18 @@ for (var iter = 0; iter < iterations; iter++)
 // ---------- 3. Scanner UI query (filter + sort + take 500) ----------
 var filter = new ScannerFilter("The Forge", 10, 20, 800e6, true);
 var queryMs = new List<double>();
-for (var iter = 0; iter < Math.Max(iterations, 10); iter++)
+for (var iter = 0; iter < 100; iter++)
 {
+    // Vary the filter like slider drags do, so verdict recompute is exercised.
+    var f = filter with { MinMarginPct = 5 + iter % 20, MaxPrice = (400 + (iter % 10) * 100) * 1e6 };
     var sw = Stopwatch.StartNew();
-    var (rows, stats) = await query.GetScannerRowsAsync(filter);
+    var (rows, stats) = await query.GetScannerRowsAsync(f);
     sw.Stop();
     queryMs.Add(sw.Elapsed.TotalMilliseconds);
     if (iter == 0) Console.WriteLine($"query[0]: {sw.Elapsed.TotalMilliseconds:0.0} ms ({rows.Count} rows, {stats.Passed} passed of {stats.Scanned:N0})");
 }
-Console.WriteLine($"query warm avg: {queryMs.Skip(1).Average():0.0} ms");
+var warmQ = queryMs.Skip(1).OrderBy(x => x).ToList();
+Console.WriteLine($"query warm median: {warmQ[warmQ.Count / 2]:0.00} ms (p95 {warmQ[(int)(warmQ.Count * 0.95)]:0.00})");
 
 // ---------- 4. Detail query ----------
 var detailMs = new List<double>();
@@ -166,7 +169,7 @@ Console.WriteLine();
 Console.WriteLine("=== SUMMARY (median) ===");
 Console.WriteLine($"upsert:   {Median(upsertMs):0} ms");
 Console.WriteLine($"evaluate: {Median(evalMs):0} ms");
-Console.WriteLine($"query:    {queryMs.Skip(1).Average():0.0} ms");
+Console.WriteLine($"query:    {warmQ[warmQ.Count / 2]:0.00} ms");
 Console.WriteLine($"detail:   {detailMs.Skip(2).Average():0.0} ms");
 
 sp.Dispose();

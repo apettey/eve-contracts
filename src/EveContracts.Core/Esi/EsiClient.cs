@@ -80,9 +80,18 @@ public class EsiClient
                     return new EsiResponse<T>(default, false, pages, newEtag);
 
                 resp.EnsureSuccessStatusCode();
-                await using var stream = await resp.Content.ReadAsStreamAsync(ct);
-                var data = await JsonSerializer.DeserializeAsync<T>(stream, JsonOpts, ct);
-                return new EsiResponse<T>(data, false, pages, newEtag);
+                try
+                {
+                    await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+                    var data = await JsonSerializer.DeserializeAsync<T>(stream, JsonOpts, ct);
+                    return new EsiResponse<T>(data, false, pages, newEtag);
+                }
+                catch (JsonException ex)
+                {
+                    // ESI occasionally returns 200 with an empty/garbled body; treat as no data.
+                    _log.LogWarning("ESI returned unparseable body for {Url}: {Error}", url, ex.Message);
+                    return new EsiResponse<T>(default, false, pages, newEtag);
+                }
             }
         }
     }

@@ -147,10 +147,19 @@ public class PriceService
         await Parallel.ForEachAsync(stale, new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
             async (tid, token) =>
             {
-                var resp = await _esi.GetAsync<List<EsiMarketHistoryDay>>(
-                    $"/markets/{EsiClient.TheForgeRegionId}/history/?type_id={tid}", ct: token);
-                var last = resp.Data?.LastOrDefault();
-                results[tid] = last?.Volume ?? 0;
+                try
+                {
+                    var resp = await _esi.GetAsync<List<EsiMarketHistoryDay>>(
+                        $"/markets/{EsiClient.TheForgeRegionId}/history/?type_id={tid}", ct: token);
+                    var last = resp.Data?.LastOrDefault();
+                    results[tid] = last?.Volume ?? 0;
+                }
+                catch (HttpRequestException)
+                {
+                    // 400 = type not tracked on the market; record zero volume so the
+                    // staleness window stops retrying it every cycle.
+                    results[tid] = 0;
+                }
             });
 
         using (var scope = _scopes.CreateScope())

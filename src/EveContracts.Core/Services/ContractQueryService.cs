@@ -23,63 +23,109 @@ public record OwnRow(long Id, string Dir, string Title, string Type, string Rout
 
 public record CharacterRow(int CharacterId, string Name, bool Authed, int Count);
 
-/// <summary>Read-side queries for the UI. Everything hits the local cache — never ESI.</summary>
+/// <summary>
+/// Read-side queries for the UI. Everything hits the local cache — never ESI.
+/// The scanner keeps an in-memory snapshot of all evaluated rows for the active
+/// region; filter changes are answered from memory (sub-ms) and the snapshot is
+/// rebuilt only when the sync pipeline reports new data.
+/// </summary>
 public class ContractQueryService
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly SettingsService _settings;
     private readonly StaticDataCache _static;
 
-    public ContractQueryService(IServiceScopeFactory scopes, SettingsService settings, StaticDataCache staticData)
+    private sealed record Snapshot(int RegionId, List<ScannerRow> Rows, int ScannedCount);
+    private Snapshot? _snap;
+    private int _dirty = 1;
+    private readonly SemaphoreSlim _snapLock = new(1, 1);
+
+    public ContractQueryService(IServiceScopeFactory scopes, SettingsService settings,
+        StaticDataCache staticData, PublicContractSync publicSync)
     {
         _scopes = scopes;
         _settings = settings;
         _static = staticData;
+        publicSync.Updated += Invalidate;
     }
+
+    public void Invalidate() => Interlocked.Exchange(ref _dirty, 1);
 
     private string TypeName(int typeId) => _static.Types.TryGetValue(typeId, out var t) ? t.Name : $"Type {typeId}";
 
     public async Task<(List<ScannerRow> rows, ScannerStats stats)> GetScannerRowsAsync(ScannerFilter f, CancellationToken ct = default)
     {
+        var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
+        var snap = _snap;
+        if (snap is null || snap.RegionId != regionId || Volatile.Read(ref _dirty) == 1)
+        {
+            await _snapLock.WaitAsync(ct);
+            try
+            {
+                snap = _snap;
+                if (snap is null || snap.RegionId != regionId || Interlocked.CompareExchange(ref _dirty, 0, 1) == 1)
+                    _snap = snap = await BuildSnapshotAsync(regionId, ct);
+            }
+            finally { _snapLock.Release(); }
+        }
+
+        var now = DateTime.UtcNow;
+        var minMargin = f.MinMarginPct / 100.0;
+        var rows = new List<ScannerRow>(512);
+        foreach (var r in snap.Rows) // pre-sorted by profit desc
+        {
+            if (r.Expires <= now || r.Price > f.MaxPrice) continue;
+            if (f.HighsecOnly && r.Sec < 0.45) continue; // EVE rounds 0.45+ to 0.5
+            var verdict = r.Verdict == "THIN" || r.Verdict == "BUY"
+                ? (r.Margin < minMargin ? "THIN" : "BUY")
+                : r.Verdict;
+            rows.Add(verdict == r.Verdict ? r : r with { Verdict = verdict });
+            if (rows.Count >= 500) break;
+        }
+
+        int passed = 0;
+        double best = 0, total = 0;
+        foreach (var r in rows)
+        {
+            if (r.Verdict != "BUY") continue;
+            passed++;
+            total += r.Profit;
+            if (r.Profit > best) best = r.Profit;
+        }
+        return (rows, new ScannerStats(snap.ScannedCount, passed, best, total));
+    }
+
+    private async Task<Snapshot> BuildSnapshotAsync(int regionId, CancellationToken ct)
+    {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         var now = DateTime.UtcNow;
-        var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
 
         var scanned = await db.PublicContracts.CountAsync(c => c.RegionId == regionId && c.DateExpired > now, ct);
 
-        var q = db.PublicContracts.AsNoTracking()
+        var live = db.PublicContracts.AsNoTracking()
             .Where(c => c.RegionId == regionId && c.DateExpired > now && c.ItemsFetched)
-            .Where(c => c.Verdict != "EXCLUDED" && c.Verdict != "PENDING")
-            .Where(c => c.Price <= f.MaxPrice);
-        if (f.HighsecOnly) q = q.Where(c => c.SecurityStatus >= 0.45); // EVE rounds 0.45+ to 0.5
+            .Where(c => c.Verdict != "EXCLUDED" && c.Verdict != "PENDING");
 
-        var list = await q.OrderByDescending(c => c.NetProfit)
-            .Include(c => c.Items)
-            .Take(500)
+        var list = await live.OrderByDescending(c => c.NetProfit).ToListAsync(ct);
+        var items = await live
+            .Join(db.ContractItems.AsNoTracking(), C => C.ContractId, I => I.ContractId, (C, I) => I)
             .ToListAsync(ct);
+        var itemsByContract = items.ToLookup(i => i.ContractId);
 
-        var rows = list.Select(c => new ScannerRow(
-            c.ContractId,
-            string.IsNullOrWhiteSpace(c.Title) ? SummarizeItems(c.Items, TypeName, 1) : c.Title,
-            SummarizeItems(c.Items, TypeName, 4),
-            c.SystemName, ShortStation(c.StationName), c.SecurityStatus, c.JumpsToJita,
-            c.Price, c.JitaSellValue, c.NetProfit, c.Margin, EffectiveVerdict(c, f), c.DateExpired,
-            ParseFlags(c.FlagsJson)))
-            .ToList();
+        var rows = list.Select(c =>
+        {
+            var cItems = itemsByContract[c.ContractId];
+            return new ScannerRow(
+                c.ContractId,
+                string.IsNullOrWhiteSpace(c.Title) ? SummarizeItems(cItems, TypeName, 1) : c.Title,
+                SummarizeItems(cItems, TypeName, 4),
+                c.SystemName, ShortStation(c.StationName), c.SecurityStatus, c.JumpsToJita,
+                c.Price, c.JitaSellValue, c.NetProfit, c.Margin, c.Verdict, c.DateExpired,
+                ParseFlags(c.FlagsJson));
+        }).ToList();
 
-        var passed = rows.Where(r => r.Verdict == "BUY").ToList();
-        var stats = new ScannerStats(scanned, passed.Count,
-            passed.Count > 0 ? passed.Max(r => r.Profit) : 0,
-            passed.Sum(r => r.Profit));
-        return (rows, stats);
-    }
-
-    /// <summary>Re-apply UI-adjustable thresholds without waiting for a backend re-evaluation.</summary>
-    private static string EffectiveVerdict(PublicContract c, ScannerFilter f)
-    {
-        if (c.Verdict is "EXCLUDED" or "PENDING" or "LOWSEC" or "SKIP" or "LOW VOL") return c.Verdict;
-        return c.Margin < f.MinMarginPct / 100.0 ? "THIN" : "BUY";
+        return new Snapshot(regionId, rows, scanned);
     }
 
     public async Task<ContractDetail?> GetDetailAsync(long contractId, CancellationToken ct = default)

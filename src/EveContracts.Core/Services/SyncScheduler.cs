@@ -119,6 +119,8 @@ public class SyncScheduler : BackgroundService
             {
                 _log.LogError(ex, "Sync cycle error");
                 SetStatus("sync error (will retry)");
+                // Retry the public scan in ~2 min instead of waiting out the full 30.
+                lastPublic = DateTime.UtcNow - TimeSpan.FromMinutes(28);
             }
             await Task.Delay(TimeSpan.FromSeconds(30), ct).ContinueWith(_ => { });
         }

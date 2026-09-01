@@ -108,9 +108,18 @@ public class PublicContractSync
         {
             ct.ThrowIfCancellationRequested();
             await FetchItemsAsync(chunk, ItemConcurrency, ct);
-            var chunkTypes = await GetTypeIdsForContractsAsync(chunk, ct);
-            await _prices.RefreshPricesAsync(await _prices.FilterStaleAsync(chunkTypes, ct), ct);
-            await EvaluateContractsAsync(chunk, ct);
+            try
+            {
+                var chunkTypes = await GetTypeIdsForContractsAsync(chunk, ct);
+                await _prices.RefreshPricesAsync(await _prices.FilterStaleAsync(chunkTypes, ct), ct);
+                await EvaluateContractsAsync(chunk, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Pricing/evaluation of one chunk failing must not stop item fetching;
+                // the post-fetch full pass covers these contracts.
+                _log.LogWarning("Chunk price/evaluate failed: {Error}", ex.Message);
+            }
             done += chunk.Length;
             if (done < newIds.Count)
                 _log.LogInformation("Items: {Done}/{Total} contracts itemized at {Ms} ms", done, newIds.Count, sw.ElapsedMilliseconds);
@@ -199,8 +208,16 @@ public class PublicContractSync
         await Parallel.ForEachAsync(contractIds, new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
             async (id, token) =>
             {
-                var resp = await _esi.GetAsync<List<EsiContractItem>>($"/contracts/public/items/{id}/", ct: token);
-                results[id] = resp.Data ?? [];
+                try
+                {
+                    var resp = await _esi.GetAsync<List<EsiContractItem>>($"/contracts/public/items/{id}/", ct: token);
+                    results[id] = resp.Data ?? [];
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Leave ItemsFetched=false so the next cycle retries this contract.
+                    _log.LogWarning("Item fetch failed for contract {Id}: {Error}", id, ex.Message);
+                }
             });
 
         await SaveItemsAsync(results.ToDictionary(
