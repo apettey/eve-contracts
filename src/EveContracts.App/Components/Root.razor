@@ -4,6 +4,7 @@
 @inject SyncScheduler Scheduler
 @inject ContractQueryService Query
 @inject SettingsService Settings
+@inject OwnContractSync OwnSync
 
 <div class="shell">
     <header class="hdr">
@@ -49,6 +50,7 @@
     {
         Ui.Changed += OnUiChanged;
         Scheduler.StatusChanged += OnUiChanged;
+        OwnSync.Updated += OnCharsChanged;
         await LoadCharsAsync();
         // Tick every 30 s so "last scan Xm ago" stays honest.
         _clock = new System.Threading.Timer(_ => _ = InvokeAsync(StateHasChanged), null,
@@ -62,7 +64,10 @@
         _authedCount = chars.Count(c => c.Authed);
     }
 
-    private void OnUiChanged() => _ = InvokeAsync(async () =>
+    // Filter clicks etc. only need a re-render; character counts change only on own-contract sync.
+    private void OnUiChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnCharsChanged() => _ = InvokeAsync(async () =>
     {
         await LoadCharsAsync();
         StateHasChanged();
@@ -97,6 +102,7 @@
     {
         Ui.Changed -= OnUiChanged;
         Scheduler.StatusChanged -= OnUiChanged;
+        OwnSync.Updated -= OnCharsChanged;
         _clock?.Dispose();
     }
 }

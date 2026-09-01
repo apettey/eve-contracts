@@ -45,7 +45,9 @@ public partial class App : Application
 #if DEBUG
                 services.AddBlazorWebViewDeveloperTools();
 #endif
-                services.AddDbContext<AppDb>(o => o.UseSqlite($"Data Source={AppPaths.DbPath}"));
+                services.AddDbContext<AppDb>(o => o
+                    .UseSqlite($"Data Source={AppPaths.DbPath}")
+                    .AddInterceptors(new EveContracts.Core.Data.SqlitePragmaInterceptor()));
 
                 services.AddHttpClient("esi", c =>
                 {

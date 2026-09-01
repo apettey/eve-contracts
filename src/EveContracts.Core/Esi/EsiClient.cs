@@ -36,7 +36,7 @@ public class EsiClient
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
-    public async Task<EsiResponse<T>> GetAsync<T>(string path, string? etag = null, string? accessToken = null, CancellationToken ct = default)
+    public async Task<EsiResponse<T>> GetAsync<T>(string path, string? etag = null, string? accessToken = null, CancellationToken ct = default, int maxRetries = 4)
     {
         var url = path.StartsWith("http") ? path : BaseUrl + path;
         for (var attempt = 0; ; attempt++)
@@ -69,7 +69,7 @@ public class EsiClient
 
                 if ((int)resp.StatusCode == 420 || (int)resp.StatusCode >= 500)
                 {
-                    if (attempt >= 4) throw new HttpRequestException($"ESI {resp.StatusCode} for {url} after retries");
+                    if (attempt >= maxRetries) throw new HttpRequestException($"ESI {resp.StatusCode} for {url} after retries");
                     var delay = (int)resp.StatusCode == 420 ? 60 : 3 * (attempt + 1);
                     _log.LogWarning("ESI {Status} for {Url}, backing off {Delay}s", (int)resp.StatusCode, url, delay);
                     await Task.Delay(TimeSpan.FromSeconds(delay), ct);
@@ -88,9 +88,10 @@ public class EsiClient
                 }
                 catch (JsonException ex)
                 {
-                    // ESI occasionally returns 200 with an empty/garbled body; treat as no data.
+                    // ESI occasionally returns 200 with an empty/garbled body. Surface it as a
+                    // request failure so callers retry later, rather than caching "no data".
                     _log.LogWarning("ESI returned unparseable body for {Url}: {Error}", url, ex.Message);
-                    return new EsiResponse<T>(default, false, pages, newEtag);
+                    throw new HttpRequestException($"Unparseable ESI body for {url}", ex);
                 }
             }
         }

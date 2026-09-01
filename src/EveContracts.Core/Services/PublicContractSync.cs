@@ -19,7 +19,7 @@ namespace EveContracts.Core.Services;
 public class PublicContractSync
 {
     private const int ItemChunkSize = 500;
-    private const int ItemConcurrency = 8;
+    private const int ItemConcurrency = 10;
 
     private readonly IServiceScopeFactory _scopes;
     private readonly EsiClient _esi;
@@ -210,7 +210,9 @@ public class PublicContractSync
             {
                 try
                 {
-                    var resp = await _esi.GetAsync<List<EsiContractItem>>($"/contracts/public/items/{id}/", ct: token);
+                    // Fail fast on 5xx: persistent 504s (usually deleted contracts) must not
+                    // stall the chunk or drain the ESI error budget; retry next cycle instead.
+                    var resp = await _esi.GetAsync<List<EsiContractItem>>($"/contracts/public/items/{id}/", ct: token, maxRetries: 1);
                     results[id] = resp.Data ?? [];
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)

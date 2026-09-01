@@ -18,7 +18,9 @@ var iterations = args.Length > 1 && int.TryParse(args[1], out var i) ? i : 3;
 
 var dbPath = Path.Combine(Path.GetTempPath(), $"evebench_{Guid.NewGuid():N}.db");
 var services = new ServiceCollection();
-services.AddDbContext<AppDb>(o => o.UseSqlite($"Data Source={dbPath}"), ServiceLifetime.Transient);
+services.AddDbContext<AppDb>(o => o
+    .UseSqlite($"Data Source={dbPath}")
+    .AddInterceptors(new SqlitePragmaInterceptor()), ServiceLifetime.Transient);
 services.AddLogging(l => l.SetMinimumLevel(LogLevel.Warning));
 services.AddHttpClient();
 services.AddSingleton<SettingsService>();

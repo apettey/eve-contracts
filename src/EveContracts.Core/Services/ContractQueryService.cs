@@ -38,6 +38,8 @@ public class ContractQueryService
     private sealed record Snapshot(int RegionId, List<ScannerRow> Rows, int ScannedCount);
     private Snapshot? _snap;
     private int _dirty = 1;
+    private DateTime _lastBuild = DateTime.MinValue;
+    private static readonly TimeSpan RebuildThrottle = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim _snapLock = new(1, 1);
 
     public ContractQueryService(IServiceScopeFactory scopes, SettingsService settings,
@@ -57,14 +59,22 @@ public class ContractQueryService
     {
         var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
         var snap = _snap;
-        if (snap is null || snap.RegionId != regionId || Volatile.Read(ref _dirty) == 1)
+        // During heavy sync every chunk marks us dirty; rebuilding at most every 2 s
+        // keeps the UI fresh without paying a full rebuild per chunk.
+        var mustBuild = snap is null || snap.RegionId != regionId;
+        var mayBuild = Volatile.Read(ref _dirty) == 1 && DateTime.UtcNow - _lastBuild > RebuildThrottle;
+        if (mustBuild || mayBuild)
         {
             await _snapLock.WaitAsync(ct);
             try
             {
                 snap = _snap;
-                if (snap is null || snap.RegionId != regionId || Interlocked.CompareExchange(ref _dirty, 0, 1) == 1)
+                if (snap is null || snap.RegionId != regionId ||
+                    (DateTime.UtcNow - _lastBuild > RebuildThrottle && Interlocked.CompareExchange(ref _dirty, 0, 1) == 1))
+                {
                     _snap = snap = await BuildSnapshotAsync(regionId, ct);
+                    _lastBuild = DateTime.UtcNow;
+                }
             }
             finally { _snapLock.Release(); }
         }

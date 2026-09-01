@@ -221,6 +221,77 @@ public static class BulkOps
         await tx.CommitAsync(ct);
     }
 
+    /// <summary>Replace the SDE tables in one transaction with prepared inserts.</summary>
+    public static async Task ReplaceStaticDataAsync(AppDb db,
+        IReadOnlyList<ItemType> types, IReadOnlyList<SolarSystem> systems, IReadOnlyList<Station> stations,
+        CancellationToken ct)
+    {
+        var conn = await OpenAsync(db, ct);
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+
+        async Task Exec(string sql)
+        {
+            await using var c = conn.CreateCommand();
+            c.Transaction = tx;
+            c.CommandText = sql;
+            await c.ExecuteNonQueryAsync(ct);
+        }
+        await Exec("DELETE FROM ItemTypes");
+        await Exec("DELETE FROM SolarSystems");
+        await Exec("DELETE FROM Stations");
+
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "INSERT INTO ItemTypes (TypeId, Name, GroupId, CategoryId, Volume, PackagedVolume) VALUES (@a,@b,@c,@d,@e,@f)";
+            var pa = cmd.Parameters.Add("@a", SqliteType.Integer);
+            var pb = cmd.Parameters.Add("@b", SqliteType.Text);
+            var pc = cmd.Parameters.Add("@c", SqliteType.Integer);
+            var pd = cmd.Parameters.Add("@d", SqliteType.Integer);
+            var pe = cmd.Parameters.Add("@e", SqliteType.Real);
+            var pf = cmd.Parameters.Add("@f", SqliteType.Real);
+            cmd.Prepare();
+            foreach (var t in types)
+            {
+                pa.Value = t.TypeId; pb.Value = t.Name; pc.Value = t.GroupId;
+                pd.Value = t.CategoryId; pe.Value = t.Volume; pf.Value = t.PackagedVolume;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+        }
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "INSERT INTO SolarSystems (SolarSystemId, Name, RegionId, Security, JumpsToJita) VALUES (@a,@b,@c,@d,@e)";
+            var pa = cmd.Parameters.Add("@a", SqliteType.Integer);
+            var pb = cmd.Parameters.Add("@b", SqliteType.Text);
+            var pc = cmd.Parameters.Add("@c", SqliteType.Integer);
+            var pd = cmd.Parameters.Add("@d", SqliteType.Real);
+            var pe = cmd.Parameters.Add("@e", SqliteType.Integer);
+            cmd.Prepare();
+            foreach (var s in systems)
+            {
+                pa.Value = s.SolarSystemId; pb.Value = s.Name; pc.Value = s.RegionId;
+                pd.Value = s.Security; pe.Value = s.JumpsToJita;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+        }
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "INSERT INTO Stations (StationId, Name, SolarSystemId) VALUES (@a,@b,@c)";
+            var pa = cmd.Parameters.Add("@a", SqliteType.Integer);
+            var pb = cmd.Parameters.Add("@b", SqliteType.Text);
+            var pc = cmd.Parameters.Add("@c", SqliteType.Integer);
+            cmd.Prepare();
+            foreach (var s in stations)
+            {
+                pa.Value = s.StationId; pb.Value = s.Name; pc.Value = s.SolarSystemId;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+        }
+        await tx.CommitAsync(ct);
+    }
+
     // SQLite stores DateTime as ISO-8601 text when written by EF; match that format
     // so EF reads back what we write.
     private static string Dt(DateTime dt) => dt.ToString("yyyy-MM-dd HH:mm:ss.fffffff", System.Globalization.CultureInfo.InvariantCulture);

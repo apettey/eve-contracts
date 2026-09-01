@@ -53,9 +53,31 @@ public class SdeService
         return await db.ItemTypes.AnyAsync(ct);
     }
 
+    public async Task<bool> HasAnyDataAsync(CancellationToken ct = default)
+    {
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        return await db.ItemTypes.AnyAsync(ct);
+    }
+
+    /// <summary>
+    /// Blocks only when there is no usable static data at all. A stale-but-present
+    /// SDE lets the app start scanning immediately while the refresh runs behind it
+    /// (game-data changes land within the same session, just not before first paint).
+    /// </summary>
     public async Task EnsureLoadedAsync(CancellationToken ct = default)
     {
         if (await IsFreshAsync(ct)) return;
+        if (await HasAnyDataAsync(ct))
+        {
+            _log.LogInformation("SDE stale; refreshing in background while scans continue");
+            _ = Task.Run(async () =>
+            {
+                try { await DownloadAndLoadAsync(ct); }
+                catch (Exception ex) { _log.LogWarning("Background SDE refresh failed: {Error}", ex.Message); }
+            }, ct);
+            return;
+        }
         await DownloadAndLoadAsync(ct);
     }
 
@@ -163,18 +185,11 @@ public class SdeService
         Progress?.Invoke("Saving static data...");
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await db.ItemTypes.ExecuteDeleteAsync(ct);
-        await db.SolarSystems.ExecuteDeleteAsync(ct);
-        await db.Stations.ExecuteDeleteAsync(ct);
-        db.ItemTypes.AddRange(types);
-        db.SolarSystems.AddRange(systems);
-        db.Stations.AddRange(stations);
+        await Data.BulkOps.ReplaceStaticDataAsync(db, types, systems, stations, ct);
         var stampRow = await db.AppSettings.FindAsync(["sde_downloaded_at"], ct);
         if (stampRow is null) db.AppSettings.Add(new AppSetting { Key = "sde_downloaded_at", Value = DateTime.UtcNow.ToString("o") });
         else stampRow.Value = DateTime.UtcNow.ToString("o");
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         _log.LogInformation("SDE loaded: {Types} types, {Systems} systems, {Stations} stations", types.Count, systems.Count, stations.Count);
         await _static.LoadAsync(ct);
         Progress?.Invoke("Static data ready.");
