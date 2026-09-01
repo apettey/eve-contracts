@@ -39,11 +39,11 @@
                 <div class="items-grid items-row">
                     <div style="min-width:0;">
                         <div class="n">@(it.Included ? "" : "⇐ ")@it.Name</div>
-                        <div class="q">×@it.Qty.ToString("N0") · @it.M3.ToString("N0") m³</div>
+                        <div class="q">×@it.Qty.ToString("N0", Inv) · @it.M3.ToString("N0", Inv) m³</div>
                     </div>
                     <div class="v">@IskFormat.Short(it.Sell)</div>
                     <div class="v dimtxt">@IskFormat.Short(it.Buy)</div>
-                    <div class="v"><span class="@(it.BelowFloor ? "vol-low" : "")">@it.VolPerDay.ToString("N0")</span></div>
+                    <div class="v"><span class="@(it.BelowFloor ? "vol-low" : "")">@it.VolPerDay.ToString("N0", Inv)</span></div>
                 </div>
             }
         </div>
@@ -54,12 +54,12 @@
         <div class="ledger">
             <div class="line"><span>Jita sell value</span><span class="v">@IskFormat.Short(Detail.Row.SellVal)</span></div>
             <div class="line"><span>Contract price</span><span class="v">−@IskFormat.Short(Detail.Row.Price)</span></div>
-            <div class="line"><span>Sales tax + broker (@FeePct.ToString("0.#")%)</span><span class="v">−@IskFormat.Short(Detail.Fees)</span></div>
-            <div class="line"><span>Hauling @Detail.TotalM3.ToString("N0") m³ · @Detail.Row.Jumps jumps</span><span class="v">−@IskFormat.Short(Detail.Hauling)</span></div>
+            <div class="line"><span>Sales tax + broker (@FeePct.ToString("0.#", Inv)%)</span><span class="v">−@IskFormat.Short(Detail.Fees)</span></div>
+            <div class="line"><span>Hauling @Detail.TotalM3.ToString("N0", Inv) m³ · @Detail.Row.Jumps jumps</span><span class="v">−@IskFormat.Short(Detail.Hauling)</span></div>
             <div class="rule"></div>
             <div class="total">
                 <span>Net profit</span>
-                <span class="v"><span class="@(Detail.Row.Profit > 0 ? "profit-pos" : "profit-neg")">@IskFormat.Signed(Detail.Row.Profit) (@((Detail.Row.Margin * 100).ToString("0.0"))%)</span></span>
+                <span class="v"><span class="@(Detail.Row.Profit > 0 ? "profit-pos" : "profit-neg")">@IskFormat.Signed(Detail.Row.Profit) (@((Detail.Row.Margin * 100).ToString("0.0", Inv))%)</span></span>
             </div>
             <div class="sub"><span>Est. time to liquidate</span><span class="v mono">@Detail.Liquidate</span></div>
         </div>
@@ -67,6 +67,7 @@
 </aside>
 
 @code {
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
     [Parameter, EditorRequired] public ContractDetail Detail { get; set; } = null!;
     [Parameter] public double MinVolume { get; set; }
     [Parameter] public double FeePct { get; set; }

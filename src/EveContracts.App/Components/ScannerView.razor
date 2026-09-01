@@ -48,7 +48,7 @@
         <div class="stats">
             <div class="stat">
                 <div class="lbl">Contracts scanned</div>
-                <div class="val">@_stats.Scanned.ToString("N0")</div>
+                <div class="val">@_stats.Scanned.ToString("N0", Inv)</div>
             </div>
             <div class="stat">
                 <div class="lbl">Passed filters</div>
@@ -91,19 +91,22 @@
                      @key="row.ContractId" @onclick="@(() => Select(row.ContractId))">
                     <div class="cell-title">
                         <span class="t">@row.Title</span>
-                        <span class="s">@row.ItemsSummary</span>
+                        @if (row.ItemsSummary != row.Title)
+                        {
+                            <span class="s">@row.ItemsSummary</span>
+                        }
                     </div>
                     <div class="cell-loc">
                         <span>@row.System</span>
                         <span class="st">@row.Station</span>
                     </div>
                     <div class="r num-sm">
-                        <span class="@(row.Sec >= 0.45 ? "sec-hi" : "sec-lo")">@row.Sec.ToString("0.0")</span><span class="dimtxt"> · @(row.Jumps)j</span>
+                        <span class="@(row.Sec >= 0.45 ? "sec-hi" : "sec-lo")">@row.Sec.ToString("0.0", Inv)</span><span class="dimtxt"> · @(row.Jumps)j</span>
                     </div>
                     <div class="r num">@IskFormat.Short(row.Price)</div>
                     <div class="r num txt2">@IskFormat.Short(row.SellVal)</div>
                     <div class="r num bold"><span class="@(row.Profit > 0 ? "profit-pos" : "profit-neg")">@IskFormat.Signed(row.Profit)</span></div>
-                    <div class="r num"><span class="@(row.Profit > 0 ? "profit-pos" : "profit-neg")">@((row.Margin * 100).ToString("0.0"))%</span></div>
+                    <div class="r num"><span class="@(row.Profit > 0 ? "profit-pos" : "profit-neg")">@((row.Margin * 100).ToString("0.0", Inv))%</span></div>
                     <div style="display:flex; justify-content:flex-end;"><span class="badge @VerdictClass(row.Verdict)">@row.Verdict</span></div>
                 </div>
             </Virtualize>
@@ -117,6 +120,7 @@
 </div>
 
 @code {
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
     private List<ScannerRow> _rows = [];
     private ScannerStats _stats = new(0, 0, 0, 0);
     private ContractDetail? _detail;
