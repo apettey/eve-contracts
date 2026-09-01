@@ -168,6 +168,59 @@ public static class BulkOps
         await tx.CommitAsync(ct);
     }
 
+    /// <summary>Upsert Jita quotes; volume columns untouched for existing rows.</summary>
+    public static async Task UpsertPriceQuotesAsync(AppDb db,
+        IReadOnlyList<(int TypeId, double Sell, double Buy)> quotes, DateTime updatedAt, CancellationToken ct)
+    {
+        if (quotes.Count == 0) return;
+        var conn = await OpenAsync(db, ct);
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO Prices (TypeId, JitaSell, JitaBuy, PrevDayVolume, PricesUpdatedAt, VolumeUpdatedAt)
+            VALUES (@t, @s, @b, 0, @at, '0001-01-01 00:00:00')
+            ON CONFLICT(TypeId) DO UPDATE SET JitaSell = @s, JitaBuy = @b, PricesUpdatedAt = @at
+            """;
+        var pt = cmd.Parameters.Add("@t", SqliteType.Integer);
+        var ps = cmd.Parameters.Add("@s", SqliteType.Real);
+        var pb = cmd.Parameters.Add("@b", SqliteType.Real);
+        cmd.Parameters.AddWithValue("@at", Dt(updatedAt));
+        cmd.Prepare();
+        foreach (var (t, s, b) in quotes)
+        {
+            pt.Value = t; ps.Value = s; pb.Value = b;
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>Upsert previous-day volumes; quote columns untouched for existing rows.</summary>
+    public static async Task UpsertPriceVolumesAsync(AppDb db,
+        IReadOnlyList<(int TypeId, double Volume)> volumes, DateTime updatedAt, CancellationToken ct)
+    {
+        if (volumes.Count == 0) return;
+        var conn = await OpenAsync(db, ct);
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO Prices (TypeId, JitaSell, JitaBuy, PrevDayVolume, PricesUpdatedAt, VolumeUpdatedAt)
+            VALUES (@t, 0, 0, @v, '0001-01-01 00:00:00', @at)
+            ON CONFLICT(TypeId) DO UPDATE SET PrevDayVolume = @v, VolumeUpdatedAt = @at
+            """;
+        var pt = cmd.Parameters.Add("@t", SqliteType.Integer);
+        var pv = cmd.Parameters.Add("@v", SqliteType.Real);
+        cmd.Parameters.AddWithValue("@at", Dt(updatedAt));
+        cmd.Prepare();
+        foreach (var (t, v) in volumes)
+        {
+            pt.Value = t; pv.Value = v;
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
     // SQLite stores DateTime as ISO-8601 text when written by EF; match that format
     // so EF reads back what we write.
     private static string Dt(DateTime dt) => dt.ToString("yyyy-MM-dd HH:mm:ss.fffffff", System.Globalization.CultureInfo.InvariantCulture);

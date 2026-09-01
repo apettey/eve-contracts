@@ -28,12 +28,16 @@ public class ContractQueryService
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly SettingsService _settings;
+    private readonly StaticDataCache _static;
 
-    public ContractQueryService(IServiceScopeFactory scopes, SettingsService settings)
+    public ContractQueryService(IServiceScopeFactory scopes, SettingsService settings, StaticDataCache staticData)
     {
         _scopes = scopes;
         _settings = settings;
+        _static = staticData;
     }
+
+    private string TypeName(int typeId) => _static.Types.TryGetValue(typeId, out var t) ? t.Name : $"Type {typeId}";
 
     public async Task<(List<ScannerRow> rows, ScannerStats stats)> GetScannerRowsAsync(ScannerFilter f, CancellationToken ct = default)
     {
@@ -55,14 +59,10 @@ public class ContractQueryService
             .Take(500)
             .ToListAsync(ct);
 
-        var typeIds = list.SelectMany(c => c.Items.Select(i => i.TypeId)).Distinct().ToList();
-        var typeNames = await db.ItemTypes.Where(t => typeIds.Contains(t.TypeId))
-            .ToDictionaryAsync(t => t.TypeId, t => t.Name, ct);
-
         var rows = list.Select(c => new ScannerRow(
             c.ContractId,
-            string.IsNullOrWhiteSpace(c.Title) ? SummarizeItems(c.Items, typeNames, 1) : c.Title,
-            SummarizeItems(c.Items, typeNames, 4),
+            string.IsNullOrWhiteSpace(c.Title) ? SummarizeItems(c.Items, TypeName, 1) : c.Title,
+            SummarizeItems(c.Items, TypeName, 4),
             c.SystemName, ShortStation(c.StationName), c.SecurityStatus, c.JumpsToJita,
             c.Price, c.JitaSellValue, c.NetProfit, c.Margin, EffectiveVerdict(c, f), c.DateExpired,
             ParseFlags(c.FlagsJson)))
@@ -91,13 +91,12 @@ public class ContractQueryService
         if (c is null) return null;
 
         var typeIds = c.Items.Select(i => i.TypeId).Distinct().ToList();
-        var types = await db.ItemTypes.Where(t => typeIds.Contains(t.TypeId)).ToDictionaryAsync(t => t.TypeId, ct);
         var prices = await db.Prices.Where(p => typeIds.Contains(p.TypeId)).ToDictionaryAsync(p => p.TypeId, ct);
         var minVol = _settings.MinDailyVolume;
 
         var items = c.Items.Select(i =>
         {
-            types.TryGetValue(i.TypeId, out var t);
+            _static.Types.TryGetValue(i.TypeId, out var t);
             prices.TryGetValue(i.TypeId, out var p);
             return new ItemDetail(
                 t?.Name ?? $"Type {i.TypeId}", i.Quantity,
@@ -109,10 +108,9 @@ public class ContractQueryService
         var worstVol = items.Where(i => i.Included).Select(i => i.VolPerDay).DefaultIfEmpty(0).Min();
         var liquidate = worstVol > 100 ? "< 1 day" : worstVol > 30 ? "1–3 days" : "3–7 days";
 
-        var typeNames = types.ToDictionary(kv => kv.Key, kv => kv.Value.Name);
         var row = new ScannerRow(c.ContractId,
-            string.IsNullOrWhiteSpace(c.Title) ? SummarizeItems(c.Items, typeNames, 1) : c.Title,
-            SummarizeItems(c.Items, typeNames, 4),
+            string.IsNullOrWhiteSpace(c.Title) ? SummarizeItems(c.Items, TypeName, 1) : c.Title,
+            SummarizeItems(c.Items, TypeName, 4),
             c.SystemName, ShortStation(c.StationName), c.SecurityStatus, c.JumpsToJita,
             c.Price, c.JitaSellValue, c.NetProfit, c.Margin, c.Verdict, c.DateExpired, ParseFlags(c.FlagsJson));
 
@@ -204,10 +202,10 @@ public class ContractQueryService
         return parts.Length >= 2 ? parts[0] + " " + parts[^1] : name[..28];
     }
 
-    private static string SummarizeItems(IEnumerable<ContractItem> items, IReadOnlyDictionary<int, string> names, int max)
+    private static string SummarizeItems(IEnumerable<ContractItem> items, Func<int, string> name, int max)
     {
         var parts = items.Where(i => i.IsIncluded)
-            .Select(i => (i.Quantity > 1 ? i.Quantity + "× " : "") + names.GetValueOrDefault(i.TypeId, "?"))
+            .Select(i => (i.Quantity > 1 ? i.Quantity + "× " : "") + name(i.TypeId))
             .ToList();
         if (parts.Count == 0) return "(no items)";
         var head = string.Join(", ", parts.Take(max));

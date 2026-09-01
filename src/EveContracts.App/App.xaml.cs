@@ -80,6 +80,7 @@ public partial class App : Application
                     sp.GetRequiredService<IHttpClientFactory>().CreateClient("esi"),
                     sp.GetRequiredService<ILogger<EsiClient>>()));
                 services.AddSingleton<SettingsService>();
+                services.AddSingleton<StaticDataCache>();
                 services.AddSingleton<SdeService>();
                 services.AddSingleton<PriceService>();
                 services.AddSingleton<PublicContractSync>();

@@ -22,6 +22,7 @@ services.AddDbContext<AppDb>(o => o.UseSqlite($"Data Source={dbPath}"), ServiceL
 services.AddLogging(l => l.SetMinimumLevel(LogLevel.Warning));
 services.AddHttpClient();
 services.AddSingleton<SettingsService>();
+services.AddSingleton<StaticDataCache>();
 services.AddSingleton(sp => new EsiClient(new HttpClient(), sp.GetRequiredService<ILogger<EsiClient>>()));
 services.AddSingleton<PriceService>();
 services.AddSingleton<PublicContractSync>();

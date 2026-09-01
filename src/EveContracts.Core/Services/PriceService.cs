@@ -24,22 +24,53 @@ public class PriceService
     private readonly IServiceScopeFactory _scopes;
     private readonly IHttpClientFactory _httpFactory;
     private readonly EsiClient _esi;
+    private readonly StaticDataCache _static;
+    private readonly SettingsService _settings;
     private readonly ILogger<PriceService> _log;
 
-    public PriceService(IServiceScopeFactory scopes, IHttpClientFactory httpFactory, EsiClient esi, ILogger<PriceService> log)
+    public PriceService(IServiceScopeFactory scopes, IHttpClientFactory httpFactory, EsiClient esi,
+        StaticDataCache staticData, SettingsService settings, ILogger<PriceService> log)
     {
         _scopes = scopes;
         _httpFactory = httpFactory;
         _esi = esi;
+        _static = staticData;
+        _settings = settings;
         _log = log;
     }
 
-    /// <summary>Type ids that appear in any cached contract (the only ones worth pricing).</summary>
+    /// <summary>Type ids that appear in any live contract (the only ones worth pricing).</summary>
     public async Task<List<int>> GetNeededTypeIdsAsync(CancellationToken ct = default)
     {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        return await db.ContractItems.Select(i => i.TypeId).Distinct().ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        return await db.ContractItems
+            .Join(db.PublicContracts.Where(c => c.DateExpired > now),
+                i => i.ContractId, c => c.ContractId, (i, c) => i.TypeId)
+            .Distinct().ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Types worth a per-type ESI history call: included items of live contracts that
+    /// are in scanner scope (ships/modules, charges if enabled). Everything else is
+    /// EXCLUDED by evaluation before the volume gate, so its history is never read.
+    /// </summary>
+    public async Task<List<int>> GetVolumeNeededTypeIdsAsync(CancellationToken ct = default)
+    {
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var now = DateTime.UtcNow;
+        var ids = await db.ContractItems.Where(i => i.IsIncluded)
+            .Join(db.PublicContracts.Where(c => c.DateExpired > now),
+                i => i.ContractId, c => c.ContractId, (i, c) => i.TypeId)
+            .Distinct().ToListAsync(ct);
+        if (!_static.Ready) await _static.LoadAsync(ct);
+        var includeCharges = _settings.IncludeCharges;
+        return ids.Where(id => _static.Types.TryGetValue(id, out var t) &&
+                (t.CategoryId == Categories.Ship || t.CategoryId == Categories.Module ||
+                 (includeCharges && t.CategoryId == Categories.Charge)))
+            .ToList();
     }
 
     /// <summary>Drop type ids whose Jita prices are fresh (&lt;1 h old).</summary>
@@ -49,9 +80,9 @@ public class PriceService
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         var cutoff = DateTime.UtcNow.AddHours(-1);
-        var fresh = await db.Prices.Where(p => typeIds.Contains(p.TypeId) && p.PricesUpdatedAt > cutoff)
-            .Select(p => p.TypeId).ToListAsync(ct);
-        return typeIds.Except(fresh).ToList();
+        var fresh = (await db.Prices.AsNoTracking().Where(p => p.PricesUpdatedAt > cutoff)
+            .Select(p => p.TypeId).ToListAsync(ct)).ToHashSet();
+        return typeIds.Where(t => !fresh.Contains(t)).ToList();
     }
 
     public async Task RefreshPricesAsync(IReadOnlyList<int> typeIds, CancellationToken ct = default)
@@ -59,39 +90,29 @@ public class PriceService
         if (typeIds.Count == 0) return;
         var http = _httpFactory.CreateClient("fuzzwork");
         var now = DateTime.UtcNow;
-        var updates = new Dictionary<int, (double sell, double buy)>();
+        var updates = new System.Collections.Concurrent.ConcurrentDictionary<int, (double sell, double buy)>();
 
-        foreach (var batch in typeIds.Chunk(BatchSize))
-        {
-            ct.ThrowIfCancellationRequested();
-            var url = $"{FuzzworkAggregates}?station={EsiClient.Jita44StationId}&types={string.Join(',', batch)}";
-            using var resp = await http.GetAsync(url, ct);
-            resp.EnsureSuccessStatusCode();
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            foreach (var prop in doc.RootElement.EnumerateObject())
+        await Parallel.ForEachAsync(typeIds.Chunk(BatchSize),
+            new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = ct },
+            async (batch, token) =>
             {
-                if (!int.TryParse(prop.Name, out var tid)) continue;
-                var sell = ReadNum(prop.Value, "sell", "min");
-                var buy = ReadNum(prop.Value, "buy", "max");
-                updates[tid] = (sell, buy);
-            }
-        }
+                var url = $"{FuzzworkAggregates}?station={EsiClient.Jita44StationId}&types={string.Join(',', batch)}";
+                using var resp = await http.GetAsync(url, token);
+                resp.EnsureSuccessStatusCode();
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(token));
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    if (!int.TryParse(prop.Name, out var tid)) continue;
+                    var sell = ReadNum(prop.Value, "sell", "min");
+                    var buy = ReadNum(prop.Value, "buy", "max");
+                    updates[tid] = (sell, buy);
+                }
+            });
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        var existing = await db.Prices.Where(p => typeIds.Contains(p.TypeId)).ToDictionaryAsync(p => p.TypeId, ct);
-        foreach (var (tid, (sell, buy)) in updates)
-        {
-            if (existing.TryGetValue(tid, out var row))
-            {
-                row.JitaSell = sell; row.JitaBuy = buy; row.PricesUpdatedAt = now;
-            }
-            else
-            {
-                db.Prices.Add(new Price { TypeId = tid, JitaSell = sell, JitaBuy = buy, PricesUpdatedAt = now });
-            }
-        }
-        await db.SaveChangesAsync(ct);
+        await Data.BulkOps.UpsertPriceQuotesAsync(db,
+            updates.Select(kv => (kv.Key, kv.Value.sell, kv.Value.buy)).ToList(), now, ct);
         _log.LogInformation("Prices refreshed for {Count} types", updates.Count);
     }
 
@@ -114,10 +135,10 @@ public class PriceService
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDb>();
             var cutoff = DateTime.UtcNow.AddHours(-20);
-            var fresh = await db.Prices
-                .Where(p => typeIds.Contains(p.TypeId) && p.VolumeUpdatedAt > cutoff)
-                .Select(p => p.TypeId).ToListAsync(ct);
-            stale = typeIds.Except(fresh).ToList();
+            var fresh = (await db.Prices.AsNoTracking()
+                .Where(p => p.VolumeUpdatedAt > cutoff)
+                .Select(p => p.TypeId).ToListAsync(ct)).ToHashSet();
+            stale = typeIds.Where(t => !fresh.Contains(t)).ToList();
         }
         if (stale.Count == 0) return;
         _log.LogInformation("Fetching market history for {Count} types", stale.Count);
@@ -135,14 +156,8 @@ public class PriceService
         using (var scope = _scopes.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-            var now = DateTime.UtcNow;
-            var rows = await db.Prices.Where(p => stale.Contains(p.TypeId)).ToDictionaryAsync(p => p.TypeId, ct);
-            foreach (var (tid, vol) in results)
-            {
-                if (rows.TryGetValue(tid, out var row)) { row.PrevDayVolume = vol; row.VolumeUpdatedAt = now; }
-                else db.Prices.Add(new Price { TypeId = tid, PrevDayVolume = vol, VolumeUpdatedAt = now });
-            }
-            await db.SaveChangesAsync(ct);
+            await Data.BulkOps.UpsertPriceVolumesAsync(db,
+                results.Select(kv => (kv.Key, kv.Value)).ToList(), DateTime.UtcNow, ct);
         }
     }
 }

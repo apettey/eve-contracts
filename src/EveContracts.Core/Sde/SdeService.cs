@@ -28,12 +28,15 @@ public class SdeService
 
     private readonly IServiceScopeFactory _scopes;
     private readonly IHttpClientFactory _httpFactory;
+    private readonly Services.StaticDataCache _static;
     private readonly ILogger<SdeService> _log;
 
-    public SdeService(IServiceScopeFactory scopes, IHttpClientFactory httpFactory, ILogger<SdeService> log)
+    public SdeService(IServiceScopeFactory scopes, IHttpClientFactory httpFactory,
+        Services.StaticDataCache staticData, ILogger<SdeService> log)
     {
         _scopes = scopes;
         _httpFactory = httpFactory;
+        _static = staticData;
         _log = log;
     }
 
@@ -173,6 +176,7 @@ public class SdeService
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         _log.LogInformation("SDE loaded: {Types} types, {Systems} systems, {Stations} stations", types.Count, systems.Count, stations.Count);
+        await _static.LoadAsync(ct);
         Progress?.Invoke("Static data ready.");
     }
 

@@ -23,6 +23,7 @@ public class SyncScheduler : BackgroundService
     private readonly PublicContractSync _publicSync;
     private readonly OwnContractSync _ownSync;
     private readonly PriceService _prices;
+    private readonly StaticDataCache _static;
     private readonly ILogger<SyncScheduler> _log;
 
     public string Status { get; private set; } = "starting";
@@ -30,7 +31,8 @@ public class SyncScheduler : BackgroundService
     public event Action? StatusChanged;
 
     public SyncScheduler(IServiceScopeFactory scopes, SdeService sde, SettingsService settings,
-        PublicContractSync publicSync, OwnContractSync ownSync, PriceService prices, ILogger<SyncScheduler> log)
+        PublicContractSync publicSync, OwnContractSync ownSync, PriceService prices,
+        StaticDataCache staticData, ILogger<SyncScheduler> log)
     {
         _scopes = scopes;
         _sde = sde;
@@ -38,6 +40,7 @@ public class SyncScheduler : BackgroundService
         _publicSync = publicSync;
         _ownSync = ownSync;
         _prices = prices;
+        _static = staticData;
         _log = log;
     }
 
@@ -57,6 +60,7 @@ public class SyncScheduler : BackgroundService
             SetStatus("loading static data");
             _sde.Progress += SetStatus;
             await _sde.EnsureLoadedAsync(ct);
+            if (!_static.Ready) await _static.LoadAsync(ct);
             SdeReady = true;
             SetStatus("ready");
         }
@@ -93,7 +97,7 @@ public class SyncScheduler : BackgroundService
                     SetStatus("refreshing prices");
                     var needed = await _prices.GetNeededTypeIdsAsync(ct);
                     await _prices.RefreshPricesAsync(needed, ct);
-                    await _prices.RefreshVolumesAsync(needed, ct: ct);
+                    await _prices.RefreshVolumesAsync(await _prices.GetVolumeNeededTypeIdsAsync(ct), ct: ct);
                     await _publicSync.EvaluateAllAsync(ct);
                     SetStatus("ready");
                 }

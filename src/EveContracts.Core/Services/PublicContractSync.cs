@@ -25,17 +25,19 @@ public class PublicContractSync
     private readonly EsiClient _esi;
     private readonly PriceService _prices;
     private readonly SettingsService _settings;
+    private readonly StaticDataCache _static;
     private readonly ILogger<PublicContractSync> _log;
 
     public event Action? Updated;
 
     public PublicContractSync(IServiceScopeFactory scopes, EsiClient esi, PriceService prices,
-        SettingsService settings, ILogger<PublicContractSync> log)
+        SettingsService settings, StaticDataCache staticData, ILogger<PublicContractSync> log)
     {
         _scopes = scopes;
         _esi = esi;
         _prices = prices;
         _settings = settings;
+        _static = staticData;
         _log = log;
     }
 
@@ -55,35 +57,49 @@ public class PublicContractSync
         }
 
         var first = await _esi.GetAsync<List<EsiPublicContract>>(page1Url, etag, ct: ct);
+        List<long> newIds;
         if (first.NotModified)
         {
+            // Contract list unchanged — but a previous run may have left contracts
+            // without items (crash/shutdown mid-fetch), so still drain the backlog.
             _log.LogInformation("Region {Region}: contracts unchanged (304)", regionId);
-            await EvaluateAllAsync(ct);
-            Updated?.Invoke();
-            return;
-        }
-        if (first.Data is not null) seen.AddRange(first.Data);
-
-        for (var page = 2; page <= first.Pages; page++)
-        {
-            ct.ThrowIfCancellationRequested();
-            var resp = await _esi.GetAsync<List<EsiPublicContract>>($"/contracts/public/{regionId}/?page={page}", ct: ct);
-            if (resp.Data is not null) seen.AddRange(resp.Data);
-        }
-        _log.LogInformation("Region {Region}: {Count} public contracts over {Pages} pages in {Ms} ms",
-            regionId, seen.Count, first.Pages, sw.ElapsedMilliseconds);
-
-        var newIds = await UpsertContractsAsync(regionId, seen, ct);
-        _log.LogInformation("Region {Region}: upsert done at {Ms} ms", regionId, sw.ElapsedMilliseconds);
-
-        if (first.Etag is not null)
-        {
             using var scope = _scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-            var etagRow = await db.EsiEtags.FindAsync([page1Url], ct);
-            if (etagRow is null) db.EsiEtags.Add(new EsiEtag { Url = page1Url, Etag = first.Etag, UpdatedAt = now });
-            else { etagRow.Etag = first.Etag; etagRow.UpdatedAt = now; }
-            await db.SaveChangesAsync(ct);
+            newIds = await db.PublicContracts
+                .Where(c => c.RegionId == regionId && !c.ItemsFetched && c.Type != "courier" && c.DateExpired > now)
+                .Select(c => c.ContractId).ToListAsync(ct);
+        }
+        else
+        {
+            if (first.Data is not null) seen.AddRange(first.Data);
+
+            if (first.Pages > 1)
+            {
+                var pageBag = new System.Collections.Concurrent.ConcurrentBag<List<EsiPublicContract>>();
+                await Parallel.ForEachAsync(Enumerable.Range(2, first.Pages - 1),
+                    new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = ct },
+                    async (page, token) =>
+                    {
+                        var resp = await _esi.GetAsync<List<EsiPublicContract>>($"/contracts/public/{regionId}/?page={page}", ct: token);
+                        if (resp.Data is not null) pageBag.Add(resp.Data);
+                    });
+                foreach (var pageData in pageBag) seen.AddRange(pageData);
+            }
+            _log.LogInformation("Region {Region}: {Count} public contracts over {Pages} pages in {Ms} ms",
+                regionId, seen.Count, first.Pages, sw.ElapsedMilliseconds);
+
+            newIds = await UpsertContractsAsync(regionId, seen, ct);
+            _log.LogInformation("Region {Region}: upsert done at {Ms} ms", regionId, sw.ElapsedMilliseconds);
+
+            if (first.Etag is not null)
+            {
+                using var scope = _scopes.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+                var etagRow = await db.EsiEtags.FindAsync([page1Url], ct);
+                if (etagRow is null) db.EsiEtags.Add(new EsiEtag { Url = page1Url, Etag = first.Etag, UpdatedAt = now });
+                else { etagRow.Etag = first.Etag; etagRow.UpdatedAt = now; }
+                await db.SaveChangesAsync(ct);
+            }
         }
 
         // Progressive: fetch/save/price/evaluate chunk by chunk.
@@ -103,8 +119,8 @@ public class PublicContractSync
         if (newIds.Count > 0)
             _log.LogInformation("Items: all {Total} new contracts itemized in {Ms} ms total", newIds.Count, sw.ElapsedMilliseconds);
 
-        // Volumes last (per-type ESI history is the slow tail), then a full pass.
-        var needed = await _prices.GetNeededTypeIdsAsync(ct);
+        // Volumes last (per-type ESI history is the slow tail, so only scoped types), then a full pass.
+        var needed = await _prices.GetVolumeNeededTypeIdsAsync(ct);
         await _prices.RefreshVolumesAsync(needed, ct: ct);
         await EvaluateAllAsync(ct);
         await _settings.SetLastPublicScanAsync(now, ct);
@@ -120,10 +136,9 @@ public class PublicContractSync
     public async Task<List<long>> UpsertContractsAsync(int regionId, IReadOnlyList<EsiPublicContract> seen, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
+        if (!_static.Ready) await _static.LoadAsync(ct);
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        var systems = await db.SolarSystems.AsNoTracking().ToDictionaryAsync(s => s.SolarSystemId, ct);
-        var stations = await db.Stations.AsNoTracking().ToDictionaryAsync(s => s.StationId, ct);
 
         var rows = new List<PublicContract>(seen.Count);
         foreach (var c in seen)
@@ -142,7 +157,7 @@ public class PublicContractSync
                 DateExpired = c.DateExpired,
                 VolumeM3 = c.Volume ?? 0,
             };
-            if (row.StartLocationId != 0 && stations.TryGetValue(row.StartLocationId, out var station))
+            if (row.StartLocationId != 0 && _static.Stations.TryGetValue(row.StartLocationId, out var station))
             {
                 row.StationName = station.Name;
                 row.SolarSystemId = station.SolarSystemId;
@@ -151,7 +166,7 @@ public class PublicContractSync
             {
                 row.StationName = "Player structure";
             }
-            if (row.SolarSystemId != 0 && systems.TryGetValue(row.SolarSystemId, out var sys))
+            if (row.SolarSystemId != 0 && _static.Systems.TryGetValue(row.SolarSystemId, out var sys))
             {
                 row.SystemName = sys.Name;
                 row.SecurityStatus = sys.Security;
@@ -207,46 +222,62 @@ public class PublicContractSync
     }
 
     /// <summary>Evaluate a specific set of contracts (progressive chunks during item fetch).</summary>
-    public async Task EvaluateContractsAsync(IReadOnlyList<long> contractIds, CancellationToken ct = default)
-    {
-        if (contractIds.Count == 0) return;
-        using var scope = _scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        var contracts = await db.PublicContracts
-            .Where(c => contractIds.Contains(c.ContractId) && c.ItemsFetched)
-            .Include(c => c.Items)
-            .ToListAsync(ct);
-        await EvaluateCoreAsync(db, contracts, ct);
-    }
+    public Task EvaluateContractsAsync(IReadOnlyList<long> contractIds, CancellationToken ct = default) =>
+        EvaluateCoreAsync(contractIds, ct);
 
     /// <summary>Re-run the evaluation pipeline over every live contract and persist verdicts.</summary>
-    public async Task EvaluateAllAsync(CancellationToken ct = default)
-    {
-        using var scope = _scopes.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        var now = DateTime.UtcNow;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var contracts = await db.PublicContracts
-            .Where(c => c.DateExpired > now && c.ItemsFetched)
-            .Include(c => c.Items)
-            .ToListAsync(ct);
-        await EvaluateCoreAsync(db, contracts, ct);
-        _log.LogInformation("Evaluated {Count} live contracts in {Ms} ms", contracts.Count, sw.ElapsedMilliseconds);
-    }
+    public Task EvaluateAllAsync(CancellationToken ct = default) => EvaluateCoreAsync(null, ct);
 
-    private async Task EvaluateCoreAsync(AppDb db, List<PublicContract> contracts, CancellationToken ct)
+    private sealed record LeanContract(long ContractId, string Type, double Price, double Sec, int Jumps,
+        DateTime Expired, string Title, string OldVerdict, double OldProfit, double OldSell, string OldFlags);
+
+    private sealed record LeanItem(long ContractId, int TypeId, long Quantity, bool IsIncluded);
+
+    /// <summary>
+    /// Lean evaluation: untracked projections in, parallel pure evaluation, and only
+    /// rows whose result actually changed are written back (prepared UPDATE, one tx).
+    /// </summary>
+    private async Task EvaluateCoreAsync(IReadOnlyList<long>? contractIds, CancellationToken ct)
     {
+        if (contractIds is { Count: 0 }) return;
+        if (!_static.Ready) await _static.LoadAsync(ct);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var now = DateTime.UtcNow;
+
         var thresholds = new EvalThresholds(_settings.MinMarginPct, _settings.MinDailyVolume, _settings.MaxPrice,
             _settings.FeePct, _settings.HaulRate, _settings.HighsecOnly, _settings.IncludeAuctions, _settings.IncludeCharges);
 
-        var typeIds = contracts.SelectMany(c => c.Items.Select(i => i.TypeId)).Distinct().ToList();
-        var prices = await db.Prices.Where(p => typeIds.Contains(p.TypeId)).ToDictionaryAsync(p => p.TypeId, ct);
-        var types = await db.ItemTypes.Where(t => typeIds.Contains(t.TypeId)).ToDictionaryAsync(t => t.TypeId, ct);
-        var itemSettings = await db.ItemSettings.ToDictionaryAsync(s => s.TypeId, ct);
-
-        foreach (var c in contracts)
+        List<LeanContract> contracts;
+        List<LeanItem> items;
+        Dictionary<int, Price> prices;
+        Dictionary<int, ItemSetting> itemSettings;
+        using (var scope = _scopes.CreateScope())
         {
-            var items = c.Items.Select(i =>
+            var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+            var live = db.PublicContracts.AsNoTracking().Where(c => c.DateExpired > now && c.ItemsFetched);
+            if (contractIds is not null) live = live.Where(c => contractIds.Contains(c.ContractId));
+
+            contracts = await live.Select(c => new LeanContract(c.ContractId, c.Type, c.Price, c.SecurityStatus,
+                c.JumpsToJita, c.DateExpired, c.Title, c.Verdict, c.NetProfit, c.JitaSellValue, c.FlagsJson)).ToListAsync(ct);
+
+            items = await live
+                .Join(db.ContractItems.AsNoTracking(), C => C.ContractId, I => I.ContractId,
+                    (C, I) => new LeanItem(I.ContractId, I.TypeId, I.Quantity, I.IsIncluded))
+                .ToListAsync(ct);
+
+            // Prices holds only types seen in contracts — small; load whole table, no giant IN().
+            prices = await db.Prices.AsNoTracking().ToDictionaryAsync(p => p.TypeId, ct);
+            itemSettings = await db.ItemSettings.AsNoTracking().ToDictionaryAsync(s => s.TypeId, ct);
+        }
+
+        var itemsByContract = items.ToLookup(i => i.ContractId);
+        var types = _static.Types;
+
+        var results = new (long Id, EvalResult R)[contracts.Count];
+        Parallel.For(0, contracts.Count, idx =>
+        {
+            var c = contracts[idx];
+            var evalItems = itemsByContract[c.ContractId].Select(i =>
             {
                 types.TryGetValue(i.TypeId, out var t);
                 prices.TryGetValue(i.TypeId, out var p);
@@ -257,18 +288,28 @@ public class PublicContractSync
                     s?.MinDailyVolumeOverride, s?.Excluded ?? false);
             }).ToList();
 
-            var result = EvaluationService.Evaluate(
-                new EvalInput(c.Type, c.Price, c.SecurityStatus, c.JumpsToJita, c.DateExpired, c.Title, items),
-                thresholds);
+            results[idx] = (c.ContractId, EvaluationService.Evaluate(
+                new EvalInput(c.Type, c.Price, c.Sec, c.Jumps, c.Expired, c.Title, evalItems), thresholds));
+        });
 
-            c.JitaSellValue = result.JitaSellValue;
-            c.Fees = result.Fees;
-            c.Hauling = result.Hauling;
-            c.NetProfit = result.NetProfit;
-            c.Margin = result.Margin;
-            c.Verdict = result.Verdict;
-            c.FlagsJson = result.FlagsJson;
+        var changed = new List<(long, EvalResult)>(contracts.Count);
+        for (var idx = 0; idx < contracts.Count; idx++)
+        {
+            var c = contracts[idx];
+            var r = results[idx].R;
+            if (r.Verdict != c.OldVerdict || Math.Abs(r.NetProfit - c.OldProfit) > 1
+                || Math.Abs(r.JitaSellValue - c.OldSell) > 1 || r.FlagsJson != c.OldFlags)
+                changed.Add((c.ContractId, r));
         }
-        await db.SaveChangesAsync(ct);
+
+        if (changed.Count > 0)
+        {
+            using var scope = _scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+            await BulkOps.UpdateEvaluationsAsync(db, changed, ct);
+        }
+        if (contractIds is null)
+            _log.LogInformation("Evaluated {Count} live contracts ({Changed} changed) in {Ms} ms",
+                contracts.Count, changed.Count, sw.ElapsedMilliseconds);
     }
 }
