@@ -194,6 +194,45 @@ public class EvaluationTests
     }
 
     [Fact]
+    public void FittedRigs_AreSunkCost()
+    {
+        // Ship + rigs: rigs are fitted (destroyed on removal) — worth 0 on resale.
+        var hull = Ship(300e6);
+        var rig = new EvalItem(31718, "Large Trimark Armor Pump I", 3, true, Categories.Module,
+            5, 8e6, 6e6, 500, null, false, IsRig: true);
+        var r = EvaluationService.Evaluate(Contract(200e6, items: [hull, rig]), Defaults);
+        Assert.Equal(300e6, r.JitaSellValue, 3); // hull only, no rig value
+        Assert.Contains("RIGGED_HULL", r.Flags);
+
+        // Loose rigs (no ship in the contract) sell normally.
+        var loose = EvaluationService.Evaluate(Contract(10e6, items: rig), Defaults);
+        Assert.Equal(24e6, loose.JitaSellValue, 3);
+        Assert.DoesNotContain("RIGGED_HULL", loose.Flags);
+    }
+
+    [Fact]
+    public void SunkRigVolume_DoesNotTriggerLowVol()
+    {
+        var hull = Ship(300e6);
+        var illiquidRig = new EvalItem(31718, "Rare Rig", 1, true, Categories.Module,
+            5, 8e6, 6e6, 1 /* below floor */, null, false, IsRig: true);
+        var r = EvaluationService.Evaluate(Contract(200e6, items: [hull, illiquidRig]), Defaults);
+        Assert.Equal("BUY", r.Verdict);
+    }
+
+    [Fact]
+    public void BuyBasis_ValuesEverythingAtBuyMax()
+    {
+        var liquid = Ship(300e6, buy: 260e6, vol: 100);
+        var r = EvaluationService.Evaluate(Contract(200e6, items: liquid),
+            Defaults with { PriceBasis = "buy" });
+        Assert.Equal(260e6, r.JitaSellValue, 3);
+        // Same contract on sell basis uses the sell price.
+        var rs = EvaluationService.Evaluate(Contract(200e6, items: liquid), Defaults);
+        Assert.Equal(300e6, rs.JitaSellValue, 3);
+    }
+
+    [Fact]
     public void ScamTitle_Flagged_ButDoesNotBlock()
     {
         var input = Contract(100e6, items: Ship(300e6)) with { Title = "★ Cheap Golem quick sale" };

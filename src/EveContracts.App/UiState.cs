@@ -15,6 +15,7 @@ public class UiState
     public double MinVolume { get; set; } = 20;
     public int MaxPriceM { get; set; } = 800;
     public bool HighsecOnly { get; set; } = true;
+    public string PriceBasis { get; set; } = "sell";
     public long? SelectedContractId { get; set; }
 
     // Own contracts filters

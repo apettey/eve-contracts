@@ -121,6 +121,7 @@ public class ItemType
     public int CategoryId { get; set; }
     public double Volume { get; set; }          // unpackaged m3
     public double PackagedVolume { get; set; }  // packaged m3 (ships shrink)
+    public bool IsRig { get; set; }             // rigs are destroyed on removal — sunk cost when fitted
 }
 
 public class SolarSystem

@@ -106,10 +106,15 @@ public class SdeService
     {
         Progress?.Invoke("Parsing static data...");
         var groups = new Dictionary<int, int>(); // groupID -> categoryID
+        var rigGroups = new HashSet<int>();      // module groups named "Rig ..."
         foreach (var row in ReadCsv("invGroups.csv", out var gCols))
         {
             if (int.TryParse(row[gCols["groupID"]], out var gid) && int.TryParse(row[gCols["categoryID"]], out var cid))
+            {
                 groups[gid] = cid;
+                if (cid == Services.Categories.Module && row[gCols["groupName"]].StartsWith("Rig", StringComparison.Ordinal))
+                    rigGroups.Add(gid);
+            }
         }
 
         var packaged = new Dictionary<int, double>();
@@ -134,6 +139,7 @@ public class SdeService
                 CategoryId = groups.GetValueOrDefault(gid),
                 Volume = vol,
                 PackagedVolume = packaged.GetValueOrDefault(tid, vol),
+                IsRig = rigGroups.Contains(gid),
             });
         }
 

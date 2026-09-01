@@ -30,7 +30,8 @@ public record EvalItem(
     double JitaBuy,
     double PrevDayVolume,
     double? MinVolumeOverride,
-    bool Excluded);
+    bool Excluded,
+    bool IsRig = false);
 
 public record EvalResult(
     string Verdict,
@@ -46,7 +47,8 @@ public record EvalResult(
 }
 
 public record EvalThresholds(double MinMarginPct, double MinDailyVolume, double MaxPrice,
-    double FeePct, double HaulRate, bool HighsecOnly, bool IncludeAuctions, bool IncludeCharges);
+    double FeePct, double HaulRate, bool HighsecOnly, bool IncludeAuctions, bool IncludeCharges,
+    string PriceBasis = "sell"); // "sell" | "buy"
 
 /// <summary>
 /// Pure profit-evaluation pipeline per the handoff spec. Ships + modules only;
@@ -73,8 +75,17 @@ public static class EvaluationService
         // Illiquid items (below their volume floor) are valued at Jita BUY max — the
         // sell-order minimum on a dead market is routinely a fake 10-100x wall placed
         // by the same people issuing the "bargain" contract.
+        // Basis "buy" values everything at Jita buy max (instant-liquidation floor).
         bool illiquid(EvalItem i) => i.PrevDayVolume <= (i.MinVolumeOverride ?? t.MinDailyVolume);
-        double includedUnitValue(EvalItem i) => illiquid(i) || i.JitaSell <= 0 ? i.JitaBuy : i.JitaSell;
+        // Rigs alongside a ship are fitted to it — they are destroyed on removal, so
+        // they contribute nothing to resale (sunk cost). Loose rigs (no ship in the
+        // contract) sell normally.
+        var hasShip = included.Any(i => i.CategoryId == Categories.Ship);
+        bool sunkRig(EvalItem i) => hasShip && i.IsRig;
+        double includedUnitValue(EvalItem i) =>
+            sunkRig(i) ? 0
+            : t.PriceBasis == "buy" || illiquid(i) || i.JitaSell <= 0 ? i.JitaBuy
+            : i.JitaSell;
         // Requested items cost what it takes to ACQUIRE them (Jita sell), not what
         // they dump for (buy) — swap scams live in that gap.
         double requestedUnitCost(EvalItem i) => i.JitaSell > 0 ? i.JitaSell : i.JitaBuy;
@@ -87,8 +98,9 @@ public static class EvaluationService
         var netProfit = sellValue - c.Price - fees - hauling;
         var margin = c.Price > 0 ? netProfit / c.Price : 0;
 
-        // 3. Volume gate: every included item above its per-item (or global) floor
-        var lowVol = included.Any(illiquid);
+        // 3. Volume gate: every included item above its per-item (or global) floor.
+        // Sunk rigs are exempt — they are never liquidated, so their volume is moot.
+        var lowVol = included.Any(i => !sunkRig(i) && illiquid(i));
 
         // Scam heuristics — these DO block (verdict SCAM) because they mark contracts
         // whose computed profit cannot be trusted at all:
@@ -106,9 +118,10 @@ public static class EvaluationService
         if (c.DateExpired - DateTime.UtcNow < TimeSpan.FromHours(24)) flags.Add("EXPIRES_SOON");
         if (lowVol) flags.Add("LOW_VOLUME_ITEM");
         if (c.SecurityStatus < 0.5) flags.Add("LOWSEC_PICKUP");
-        if (included.Any(i => i.JitaSell <= 0)) flags.Add("UNPRICED_ITEM");
+        if (included.Any(i => !sunkRig(i) && i.JitaSell <= 0)) flags.Add("UNPRICED_ITEM");
         if (tooGood) flags.Add("TOO_GOOD");
         if (unpricedRequested) flags.Add("UNPRICED_REQUESTED");
+        if (included.Any(sunkRig)) flags.Add("RIGGED_HULL");
 
         // A >10x return on a LIQUID item can be a genuine mispriced snipe — flag it but
         // let it through; on an illiquid item it is noise on top of a fake valuation.

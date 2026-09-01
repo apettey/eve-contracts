@@ -37,6 +37,13 @@
                     <span class="slider-val" style="min-width:52px">@MaxPriceLabel</span>
                 </div>
             </div>
+            <div class="fgroup">
+                <label class="flabel">Value at</label>
+                <div class="slider-row" style="gap:6px;">
+                    <button class="pill @(Ui.PriceBasis == "sell" ? "active" : "")" @onclick="@(() => SetBasis("sell"))">Jita sell</button>
+                    <button class="pill @(Ui.PriceBasis == "buy" ? "active" : "")" @onclick="@(() => SetBasis("buy"))">Jita buy</button>
+                </div>
+            </div>
             <label class="chk">
                 <input type="checkbox" checked="@Ui.HighsecOnly" @onchange="OnHighsec" />
                 Highsec only
@@ -128,8 +135,20 @@
 
     protected override async Task OnInitializedAsync()
     {
+        Ui.PriceBasis = Settings.PriceBasis;
         PublicSync.Updated += OnDataUpdated;
         await ReloadAsync();
+    }
+
+    private void SetBasis(string basis)
+    {
+        if (Ui.PriceBasis == basis) return;
+        Ui.PriceBasis = basis;
+        _ = Settings.SetAsync("price_basis", basis);
+        // Basis is baked into the persisted evaluation; re-run it in the background —
+        // its Updated event invalidates the snapshot and refreshes the table.
+        _ = Task.Run(() => PublicSync.EvaluateAllAsync());
+        StateHasChanged();
     }
 
     private ScannerFilter Filter => new(Ui.Region, Ui.MinMargin, Ui.MinVolume, Ui.MaxPriceM * 1e6, Ui.HighsecOnly);

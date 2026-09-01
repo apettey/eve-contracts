@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace EveContracts.Core.Services;
 
-public record TypeInfo(string Name, int CategoryId, double PackagedVolume);
+public record TypeInfo(string Name, int CategoryId, double PackagedVolume, bool IsRig = false);
 public record SystemInfo(string Name, double Security, int JumpsToJita);
 public record StationInfo(string Name, int SolarSystemId);
 
@@ -37,7 +37,7 @@ public class StaticDataCache
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         Types = await db.ItemTypes.AsNoTracking()
-            .ToDictionaryAsync(t => t.TypeId, t => new TypeInfo(t.Name, t.CategoryId, t.PackagedVolume), ct);
+            .ToDictionaryAsync(t => t.TypeId, t => new TypeInfo(t.Name, t.CategoryId, t.PackagedVolume, t.IsRig), ct);
         Systems = await db.SolarSystems.AsNoTracking()
             .ToDictionaryAsync(s => s.SolarSystemId, s => new SystemInfo(s.Name, s.Security, s.JumpsToJita), ct);
         Stations = await db.Stations.AsNoTracking()

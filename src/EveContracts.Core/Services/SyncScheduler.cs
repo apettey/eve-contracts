@@ -61,6 +61,20 @@ public class SyncScheduler : BackgroundService
             SetStatus("loading static data");
             _sde.Progress += SetStatus;
             await _sde.EnsureLoadedAsync(ct);
+
+            // A schema upgrade can leave derived columns (e.g. IsRig) unpopulated in an
+            // otherwise-fresh SDE; rigs always exist, so zero rig rows means re-parse.
+            using (var scope = _scopes.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+                if (await db.ItemTypes.AnyAsync(ct) && !await db.ItemTypes.AnyAsync(t => t.IsRig, ct))
+                {
+                    _log.LogInformation("Re-parsing SDE to populate rig data");
+                    try { await _sde.LoadFromDiskAsync(ct); }
+                    catch (FileNotFoundException) { await _sde.DownloadAndLoadAsync(ct); }
+                }
+            }
+
             if (!_static.Ready) await _static.LoadAsync(ct);
             SdeReady = true;
             SetStatus("ready");
@@ -158,6 +172,7 @@ public class SyncScheduler : BackgroundService
             "ALTER TABLE OwnContracts ADD COLUMN DaysToComplete INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE OwnContracts ADD COLUMN Buyout REAL NOT NULL DEFAULT 0",
             "ALTER TABLE OwnContracts ADD COLUMN ItemsFetched INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE ItemTypes ADD COLUMN IsRig INTEGER NOT NULL DEFAULT 0",
         ];
         var conn = await Data.BulkOps.OpenAsync(db, ct);
         foreach (var sql in statements)

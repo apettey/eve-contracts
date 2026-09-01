@@ -243,18 +243,20 @@ public static class BulkOps
         await using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
-            cmd.CommandText = "INSERT INTO ItemTypes (TypeId, Name, GroupId, CategoryId, Volume, PackagedVolume) VALUES (@a,@b,@c,@d,@e,@f)";
+            cmd.CommandText = "INSERT INTO ItemTypes (TypeId, Name, GroupId, CategoryId, Volume, PackagedVolume, IsRig) VALUES (@a,@b,@c,@d,@e,@f,@g)";
             var pa = cmd.Parameters.Add("@a", SqliteType.Integer);
             var pb = cmd.Parameters.Add("@b", SqliteType.Text);
             var pc = cmd.Parameters.Add("@c", SqliteType.Integer);
             var pd = cmd.Parameters.Add("@d", SqliteType.Integer);
             var pe = cmd.Parameters.Add("@e", SqliteType.Real);
             var pf = cmd.Parameters.Add("@f", SqliteType.Real);
+            var pg = cmd.Parameters.Add("@g", SqliteType.Integer);
             cmd.Prepare();
             foreach (var t in types)
             {
                 pa.Value = t.TypeId; pb.Value = t.Name; pc.Value = t.GroupId;
                 pd.Value = t.CategoryId; pe.Value = t.Volume; pf.Value = t.PackagedVolume;
+                pg.Value = t.IsRig ? 1 : 0;
                 await cmd.ExecuteNonQueryAsync(ct);
             }
         }

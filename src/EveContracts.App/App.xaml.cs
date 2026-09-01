@@ -92,10 +92,15 @@ public partial class App : Application
                 services.AddSingleton<SyncScheduler>();
                 services.AddHostedService(sp => sp.GetRequiredService<SyncScheduler>());
                 services.AddSingleton<UiState>();
+                services.AddSingleton<AlertSoundService>();
             })
             .Build();
 
         await AppHost.StartAsync();
+
+        var sounds = AppHost.Services.GetRequiredService<AlertSoundService>();
+        AppHost.Services.GetRequiredService<OwnContractSync>().NewInboundContracts += _ => sounds.PlayNewContract();
+        AppHost.Services.GetRequiredService<PublicContractSync>().BigProfitFound += (_, _) => sounds.PlayProfitAlert();
 
         var window = new MainWindow();
         MainWindow = window;

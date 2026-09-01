@@ -44,6 +44,10 @@ public class SettingsService
     public double FeePct { get => GetD("fee_pct", 4.5); }
     public double HaulRate { get => GetD("haul_rate", 800); }
     public bool HighsecOnly { get => Get("highsec_only", "1") == "1"; }
+    /// <summary>"sell" = liquid items at Jita sell min (illiquid at buy); "buy" = everything at Jita buy max.</summary>
+    public string PriceBasis { get => Get("price_basis", "sell") == "buy" ? "buy" : "sell"; }
+    public bool SoundAlerts { get => Get("sound_alerts", "1") == "1"; }
+    public double AlertProfitMin { get => GetD("alert_profit_min", 100e6); }
     public bool IncludeAuctions { get => Get("include_auctions", "0") == "1"; }
     public bool IncludeCharges { get => Get("include_charges", "0") == "1"; }
     public string Region { get => Get("region", "The Forge"); }

@@ -28,6 +28,19 @@
             <input type="number" @bind="_haulRate" style="width:100px" />
         </div>
 
+        <div class="frow">
+            <label class="flabel">Profit alert threshold (million ISK)</label>
+            <input type="number" @bind="_alertProfitM" style="width:100px" />
+            <div class="hint">Plays a sound when a new BUY contract exceeds this net profit. 0 disables.</div>
+        </div>
+
+        <div class="frow">
+            <label class="chk" style="padding-bottom:0;">
+                <input type="checkbox" @bind="_soundAlerts" />
+                Sound alerts (new inbound contracts, big-profit finds)
+            </label>
+        </div>
+
         <div class="actions" style="justify-content:flex-start;">
             <button class="btn" @onclick="AddCharacter" disabled="@_busy">Add character (ESI login)</button>
             <button class="btn" @onclick="RescanNow" disabled="@_busy">Rescan public contracts</button>
@@ -50,6 +63,8 @@
     private string _clientId = "";
     private double _feePct;
     private double _haulRate;
+    private double _alertProfitM;
+    private bool _soundAlerts;
     private bool _busy;
     private string? _error;
     private string? _msg;
@@ -59,6 +74,8 @@
         _clientId = Settings.EsiClientId;
         _feePct = Settings.FeePct;
         _haulRate = Settings.HaulRate;
+        _alertProfitM = Settings.AlertProfitMin / 1e6;
+        _soundAlerts = Settings.SoundAlerts;
     }
 
     private async Task Save()
@@ -66,6 +83,8 @@
         await Settings.SetAsync("esi_client_id", _clientId.Trim());
         await Settings.SetAsync("fee_pct", _feePct.ToString(System.Globalization.CultureInfo.InvariantCulture));
         await Settings.SetAsync("haul_rate", _haulRate.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await Settings.SetAsync("alert_profit_min", (_alertProfitM * 1e6).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await Settings.SetAsync("sound_alerts", _soundAlerts ? "1" : "0");
         _msg = "Saved.";
         _error = null;
     }

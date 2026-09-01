@@ -19,6 +19,9 @@ public class OwnContractSync
 
     public event Action? Updated;
 
+    /// <summary>Fired when a sync discovers contracts newly assigned to our characters (count).</summary>
+    public event Action<int>? NewInboundContracts;
+
     public OwnContractSync(IServiceScopeFactory scopes, EsiClient esi, EsiAuthService auth,
         IHttpClientFactory httpFactory, ILogger<OwnContractSync> log)
     {
@@ -37,19 +40,26 @@ public class OwnContractSync
             var db = scope.ServiceProvider.GetRequiredService<AppDb>();
             chars = await db.Characters.AsNoTracking().ToListAsync(ct);
         }
+        var newInbound = 0;
         foreach (var ch in chars)
         {
             ct.ThrowIfCancellationRequested();
-            try { await SyncCharacterAsync(ch, ct); }
+            try { newInbound += await SyncCharacterAsync(ch, ct); }
             catch (Exception ex) { _log.LogWarning("Own-contract sync failed for {Name}: {Error}", ch.Name, ex.Message); }
+        }
+        if (newInbound > 0)
+        {
+            _log.LogInformation("{Count} new inbound contract(s) received", newInbound);
+            NewInboundContracts?.Invoke(newInbound);
         }
         Updated?.Invoke();
     }
 
-    private async Task SyncCharacterAsync(Character ch, CancellationToken ct)
+    /// <summary>Returns how many previously unseen inbound contracts this sync found.</summary>
+    private async Task<int> SyncCharacterAsync(Character ch, CancellationToken ct)
     {
         var token = await _auth.GetAccessTokenAsync(ch.CharacterId, ct);
-        if (token is null) return;
+        if (token is null) return 0;
 
         var all = new List<EsiCharacterContract>();
         var first = await _esi.GetAsync<List<EsiCharacterContract>>($"/characters/{ch.CharacterId}/contracts/?page=1", accessToken: token, ct: ct);
@@ -72,6 +82,10 @@ public class OwnContractSync
         var known = await db.OwnContracts.Where(o => o.CharacterId == ch.CharacterId)
             .ToDictionaryAsync(o => o.ContractId, ct);
 
+        // Only alert on inbound contracts found after this character's first-ever sync —
+        // the initial backfill of historical contracts must not fire a wall of sounds.
+        var isFirstSync = ch.LastSync == default;
+        var newInbound = 0;
         foreach (var c in all)
         {
             var isIssuer = c.IssuerId == ch.CharacterId;
@@ -79,6 +93,7 @@ public class OwnContractSync
             {
                 row = new OwnContract { ContractId = c.ContractId, CharacterId = ch.CharacterId };
                 db.OwnContracts.Add(row);
+                if (!isIssuer && !isFirstSync) newInbound++;
             }
             row.CharacterName = ch.Name;
             row.Direction = isIssuer ? "OUT" : "IN";
@@ -105,6 +120,7 @@ public class OwnContractSync
         await db.SaveChangesAsync(ct);
         var last = await db.Characters.FindAsync([ch.CharacterId], ct);
         if (last is not null) { last.LastSync = DateTime.UtcNow; await db.SaveChangesAsync(ct); }
+        return newInbound;
     }
 
     private async Task<Dictionary<long, string>> GetStationLookupAsync(CancellationToken ct)

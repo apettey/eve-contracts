@@ -30,6 +30,12 @@ public class PublicContractSync
 
     public event Action? Updated;
 
+    /// <summary>Fired when contracts newly cross the profit-alert threshold: (count, best profit).</summary>
+    public event Action<int, double>? BigProfitFound;
+
+    private readonly HashSet<long> _profitAlerted = [];
+    private bool _alertBaselineDone;
+
     public PublicContractSync(IServiceScopeFactory scopes, EsiClient esi, PriceService prices,
         SettingsService settings, StaticDataCache staticData, ILogger<PublicContractSync> log)
     {
@@ -264,7 +270,8 @@ public class PublicContractSync
         var now = DateTime.UtcNow;
 
         var thresholds = new EvalThresholds(_settings.MinMarginPct, _settings.MinDailyVolume, _settings.MaxPrice,
-            _settings.FeePct, _settings.HaulRate, _settings.HighsecOnly, _settings.IncludeAuctions, _settings.IncludeCharges);
+            _settings.FeePct, _settings.HaulRate, _settings.HighsecOnly, _settings.IncludeAuctions, _settings.IncludeCharges,
+            _settings.PriceBasis);
 
         List<LeanContract> contracts;
         List<LeanItem> items;
@@ -304,7 +311,7 @@ public class PublicContractSync
                 return new EvalItem(i.TypeId, t?.Name ?? $"Type {i.TypeId}", i.Quantity, i.IsIncluded,
                     t?.CategoryId ?? 0, t?.PackagedVolume ?? 0,
                     p?.JitaSell ?? 0, p?.JitaBuy ?? 0, p?.PrevDayVolume ?? 0,
-                    s?.MinDailyVolumeOverride, s?.Excluded ?? false);
+                    s?.MinDailyVolumeOverride, s?.Excluded ?? false, t?.IsRig ?? false);
             }).ToList();
 
             results[idx] = (c.ContractId, EvaluationService.Evaluate(
@@ -328,7 +335,48 @@ public class PublicContractSync
             await BulkOps.UpdateEvaluationsAsync(db, changed, ct);
         }
         if (contractIds is null)
+        {
             _log.LogInformation("Evaluated {Count} live contracts ({Changed} changed) in {Ms} ms",
                 contracts.Count, changed.Count, sw.ElapsedMilliseconds);
+            if (changed.Count > 0) Updated?.Invoke(); // full passes outside SyncRegion (basis/threshold changes) must refresh the UI
+        }
+        await CheckProfitAlertsAsync(ct);
+    }
+
+    /// <summary>
+    /// Fires BigProfitFound for contracts newly crossing the alert threshold as a
+    /// BUY. The first pass after startup only seeds the seen-set, so restarting the
+    /// app never re-alerts contracts that were already on the board.
+    /// </summary>
+    private async Task CheckProfitAlertsAsync(CancellationToken ct)
+    {
+        var threshold = _settings.AlertProfitMin;
+        if (threshold <= 0) return;
+        var now = DateTime.UtcNow;
+        List<(long Id, double Profit)> qualifying;
+        using (var scope = _scopes.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+            qualifying = (await db.PublicContracts.AsNoTracking()
+                .Where(c => c.Verdict == "BUY" && c.NetProfit >= threshold && c.DateExpired > now)
+                .Select(c => new { c.ContractId, c.NetProfit }).ToListAsync(ct))
+                .Select(x => (x.ContractId, x.NetProfit)).ToList();
+        }
+
+        if (!_alertBaselineDone)
+        {
+            foreach (var (id, _) in qualifying) _profitAlerted.Add(id);
+            _alertBaselineDone = true;
+            return;
+        }
+
+        var fresh = qualifying.Where(x => _profitAlerted.Add(x.Id)).ToList();
+        if (fresh.Count > 0)
+        {
+            var best = fresh.Max(x => x.Profit);
+            _log.LogInformation("Profit alert: {Count} new contracts over {Threshold}, best {Best}",
+                fresh.Count, Formatting.IskFormat.Short(threshold), Formatting.IskFormat.Signed(best));
+            BigProfitFound?.Invoke(fresh.Count, best);
+        }
     }
 }
