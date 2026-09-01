@@ -11,9 +11,16 @@ namespace EveContracts.Core.Services;
 /// Polls public contracts for the enabled region, upserts them, fetches items
 /// only for never-seen contract ids (ESI error limits bite otherwise), then
 /// re-runs profit evaluation over all live contracts.
+///
+/// Item fetching is progressive: chunks of contracts are fetched, saved,
+/// priced and evaluated immediately, so the UI fills in during a long first
+/// run instead of staying empty until the whole region is itemized.
 /// </summary>
 public class PublicContractSync
 {
+    private const int ItemChunkSize = 500;
+    private const int ItemConcurrency = 8;
+
     private readonly IServiceScopeFactory _scopes;
     private readonly EsiClient _esi;
     private readonly PriceService _prices;
@@ -35,6 +42,7 @@ public class PublicContractSync
     public async Task SyncRegionAsync(int regionId, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var seen = new List<EsiPublicContract>();
 
         // Page 1 with ETag; if 304, region contracts unchanged — still re-evaluate (prices may have moved).
@@ -62,92 +70,115 @@ public class PublicContractSync
             var resp = await _esi.GetAsync<List<EsiPublicContract>>($"/contracts/public/{regionId}/?page={page}", ct: ct);
             if (resp.Data is not null) seen.AddRange(resp.Data);
         }
-        _log.LogInformation("Region {Region}: {Count} public contracts over {Pages} pages", regionId, seen.Count, first.Pages);
+        _log.LogInformation("Region {Region}: {Count} public contracts over {Pages} pages in {Ms} ms",
+            regionId, seen.Count, first.Pages, sw.ElapsedMilliseconds);
 
-        List<long> newIds;
-        using (var scope = _scopes.CreateScope())
+        var newIds = await UpsertContractsAsync(regionId, seen, ct);
+        _log.LogInformation("Region {Region}: upsert done at {Ms} ms", regionId, sw.ElapsedMilliseconds);
+
+        if (first.Etag is not null)
         {
+            using var scope = _scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-            var systems = await db.SolarSystems.ToDictionaryAsync(s => s.SolarSystemId, ct);
-            var stations = await db.Stations.ToDictionaryAsync(s => s.StationId, ct);
-
-            var known = await db.PublicContracts.Where(c => c.RegionId == regionId)
-                .ToDictionaryAsync(c => c.ContractId, ct);
-
-            foreach (var c in seen)
-            {
-                if (!known.TryGetValue(c.ContractId, out var row))
-                {
-                    row = new PublicContract { ContractId = c.ContractId, RegionId = regionId, FirstSeen = now };
-                    db.PublicContracts.Add(row);
-                }
-                row.Type = c.Type;
-                row.Title = c.Title ?? "";
-                row.Price = c.Price ?? 0;
-                row.StartLocationId = c.StartLocationId ?? 0;
-                row.DateIssued = c.DateIssued;
-                row.DateExpired = c.DateExpired;
-                row.VolumeM3 = c.Volume ?? 0;
-                row.LastSeen = now;
-
-                if (row.StartLocationId != 0 && stations.TryGetValue(row.StartLocationId, out var station))
-                {
-                    row.StationName = station.Name;
-                    row.SolarSystemId = station.SolarSystemId;
-                }
-                else if (row.SolarSystemId == 0)
-                {
-                    row.StationName = "Player structure";
-                }
-                if (row.SolarSystemId != 0 && systems.TryGetValue(row.SolarSystemId, out var sys))
-                {
-                    row.SystemName = sys.Name;
-                    row.SecurityStatus = sys.Security;
-                    row.JumpsToJita = sys.JumpsToJita;
-                }
-
-                known[c.ContractId] = row;
-            }
-
-            if (first.Etag is not null)
-            {
-                var etagRow = await db.EsiEtags.FindAsync([page1Url], ct);
-                if (etagRow is null) db.EsiEtags.Add(new EsiEtag { Url = page1Url, Etag = first.Etag, UpdatedAt = now });
-                else { etagRow.Etag = first.Etag; etagRow.UpdatedAt = now; }
-            }
+            var etagRow = await db.EsiEtags.FindAsync([page1Url], ct);
+            if (etagRow is null) db.EsiEtags.Add(new EsiEtag { Url = page1Url, Etag = first.Etag, UpdatedAt = now });
+            else { etagRow.Etag = first.Etag; etagRow.UpdatedAt = now; }
             await db.SaveChangesAsync(ct);
-
-            newIds = await db.PublicContracts
-                .Where(c => c.RegionId == regionId && !c.ItemsFetched && c.Type != "courier")
-                .Select(c => c.ContractId).ToListAsync(ct);
         }
 
-        await FetchItemsAsync(newIds, ct: ct);
+        // Progressive: fetch/save/price/evaluate chunk by chunk.
+        var done = 0;
+        foreach (var chunk in newIds.Chunk(ItemChunkSize))
+        {
+            ct.ThrowIfCancellationRequested();
+            await FetchItemsAsync(chunk, ItemConcurrency, ct);
+            var chunkTypes = await GetTypeIdsForContractsAsync(chunk, ct);
+            await _prices.RefreshPricesAsync(await _prices.FilterStaleAsync(chunkTypes, ct), ct);
+            await EvaluateContractsAsync(chunk, ct);
+            done += chunk.Length;
+            if (done < newIds.Count)
+                _log.LogInformation("Items: {Done}/{Total} contracts itemized at {Ms} ms", done, newIds.Count, sw.ElapsedMilliseconds);
+            Updated?.Invoke();
+        }
+        if (newIds.Count > 0)
+            _log.LogInformation("Items: all {Total} new contracts itemized in {Ms} ms total", newIds.Count, sw.ElapsedMilliseconds);
 
-        // Prices for any types we haven't priced yet, then evaluate.
+        // Volumes last (per-type ESI history is the slow tail), then a full pass.
         var needed = await _prices.GetNeededTypeIdsAsync(ct);
-        await _prices.RefreshPricesAsync(await FilterUnpricedAsync(needed, ct), ct);
         await _prices.RefreshVolumesAsync(needed, ct: ct);
         await EvaluateAllAsync(ct);
         await _settings.SetLastPublicScanAsync(now, ct);
+        _log.LogInformation("Region {Region}: full sync finished in {Ms} ms", regionId, sw.ElapsedMilliseconds);
         Updated?.Invoke();
     }
 
-    private async Task<List<int>> FilterUnpricedAsync(List<int> typeIds, CancellationToken ct)
+    /// <summary>
+    /// Upsert one scan's contracts via prepared raw-SQL statements (no change tracking).
+    /// FirstSeen/ItemsFetched/evaluation columns are preserved for known ids.
+    /// Returns the live contract ids that still need their items fetched.
+    /// </summary>
+    public async Task<List<long>> UpsertContractsAsync(int regionId, IReadOnlyList<EsiPublicContract> seen, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var systems = await db.SolarSystems.AsNoTracking().ToDictionaryAsync(s => s.SolarSystemId, ct);
+        var stations = await db.Stations.AsNoTracking().ToDictionaryAsync(s => s.StationId, ct);
+
+        var rows = new List<PublicContract>(seen.Count);
+        foreach (var c in seen)
+        {
+            var row = new PublicContract
+            {
+                ContractId = c.ContractId,
+                RegionId = regionId,
+                FirstSeen = now,
+                LastSeen = now,
+                Type = c.Type,
+                Title = c.Title ?? "",
+                Price = c.Price ?? 0,
+                StartLocationId = c.StartLocationId ?? 0,
+                DateIssued = c.DateIssued,
+                DateExpired = c.DateExpired,
+                VolumeM3 = c.Volume ?? 0,
+            };
+            if (row.StartLocationId != 0 && stations.TryGetValue(row.StartLocationId, out var station))
+            {
+                row.StationName = station.Name;
+                row.SolarSystemId = station.SolarSystemId;
+            }
+            else
+            {
+                row.StationName = "Player structure";
+            }
+            if (row.SolarSystemId != 0 && systems.TryGetValue(row.SolarSystemId, out var sys))
+            {
+                row.SystemName = sys.Name;
+                row.SecurityStatus = sys.Security;
+                row.JumpsToJita = sys.JumpsToJita;
+            }
+            rows.Add(row);
+        }
+
+        await BulkOps.UpsertPublicContractsAsync(db, rows, ct);
+
+        return await db.PublicContracts
+            .Where(c => c.RegionId == regionId && !c.ItemsFetched && c.Type != "courier" && c.DateExpired > now)
+            .Select(c => c.ContractId).ToListAsync(ct);
+    }
+
+    private async Task<List<int>> GetTypeIdsForContractsAsync(IReadOnlyList<long> contractIds, CancellationToken ct)
     {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        var cutoff = DateTime.UtcNow.AddHours(-1);
-        var fresh = await db.Prices.Where(p => typeIds.Contains(p.TypeId) && p.PricesUpdatedAt > cutoff)
-            .Select(p => p.TypeId).ToListAsync(ct);
-        return typeIds.Except(fresh).ToList();
+        return await db.ContractItems.Where(i => contractIds.Contains(i.ContractId))
+            .Select(i => i.TypeId).Distinct().ToListAsync(ct);
     }
 
     /// <summary>Fetch item lists for contracts we have never itemized. Never re-fetches known ids.</summary>
-    public async Task FetchItemsAsync(IReadOnlyList<long> contractIds, int maxConcurrency = 6, CancellationToken ct = default)
+    public async Task FetchItemsAsync(IReadOnlyList<long> contractIds, int maxConcurrency = ItemConcurrency, CancellationToken ct = default)
     {
         if (contractIds.Count == 0) return;
-        _log.LogInformation("Fetching items for {Count} new contracts", contractIds.Count);
         var results = new System.Collections.Concurrent.ConcurrentDictionary<long, List<EsiContractItem>>();
 
         await Parallel.ForEachAsync(contractIds, new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
@@ -157,26 +188,35 @@ public class PublicContractSync
                 results[id] = resp.Data ?? [];
             });
 
+        await SaveItemsAsync(results.ToDictionary(
+            kv => kv.Key,
+            kv => kv.Value.Select(it => new ContractItem
+            {
+                ContractId = kv.Key,
+                TypeId = it.TypeId,
+                Quantity = it.Quantity,
+                IsIncluded = it.IsIncluded ?? true,
+            }).ToList()), ct);
+    }
+
+    public async Task SaveItemsAsync(Dictionary<long, List<ContractItem>> itemsByContract, CancellationToken ct = default)
+    {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-        var ids = results.Keys.ToList();
-        var rows = await db.PublicContracts.Where(c => ids.Contains(c.ContractId)).ToDictionaryAsync(c => c.ContractId, ct);
-        foreach (var (id, items) in results)
-        {
-            if (!rows.TryGetValue(id, out var row)) continue;
-            row.ItemsFetched = true;
-            foreach (var it in items)
-            {
-                db.ContractItems.Add(new ContractItem
-                {
-                    ContractId = id,
-                    TypeId = it.TypeId,
-                    Quantity = it.Quantity,
-                    IsIncluded = it.IsIncluded ?? true,
-                });
-            }
-        }
-        await db.SaveChangesAsync(ct);
+        await BulkOps.InsertContractItemsAsync(db, itemsByContract, ct);
+    }
+
+    /// <summary>Evaluate a specific set of contracts (progressive chunks during item fetch).</summary>
+    public async Task EvaluateContractsAsync(IReadOnlyList<long> contractIds, CancellationToken ct = default)
+    {
+        if (contractIds.Count == 0) return;
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var contracts = await db.PublicContracts
+            .Where(c => contractIds.Contains(c.ContractId) && c.ItemsFetched)
+            .Include(c => c.Items)
+            .ToListAsync(ct);
+        await EvaluateCoreAsync(db, contracts, ct);
     }
 
     /// <summary>Re-run the evaluation pipeline over every live contract and persist verdicts.</summary>
@@ -185,14 +225,19 @@ public class PublicContractSync
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         var now = DateTime.UtcNow;
-
-        var thresholds = new EvalThresholds(_settings.MinMarginPct, _settings.MinDailyVolume, _settings.MaxPrice,
-            _settings.FeePct, _settings.HaulRate, _settings.HighsecOnly, _settings.IncludeAuctions, _settings.IncludeCharges);
-
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var contracts = await db.PublicContracts
             .Where(c => c.DateExpired > now && c.ItemsFetched)
             .Include(c => c.Items)
             .ToListAsync(ct);
+        await EvaluateCoreAsync(db, contracts, ct);
+        _log.LogInformation("Evaluated {Count} live contracts in {Ms} ms", contracts.Count, sw.ElapsedMilliseconds);
+    }
+
+    private async Task EvaluateCoreAsync(AppDb db, List<PublicContract> contracts, CancellationToken ct)
+    {
+        var thresholds = new EvalThresholds(_settings.MinMarginPct, _settings.MinDailyVolume, _settings.MaxPrice,
+            _settings.FeePct, _settings.HaulRate, _settings.HighsecOnly, _settings.IncludeAuctions, _settings.IncludeCharges);
 
         var typeIds = contracts.SelectMany(c => c.Items.Select(i => i.TypeId)).Distinct().ToList();
         var prices = await db.Prices.Where(p => typeIds.Contains(p.TypeId)).ToDictionaryAsync(p => p.TypeId, ct);
@@ -225,6 +270,5 @@ public class PublicContractSync
             c.FlagsJson = result.FlagsJson;
         }
         await db.SaveChangesAsync(ct);
-        _log.LogInformation("Evaluated {Count} live contracts", contracts.Count);
     }
 }

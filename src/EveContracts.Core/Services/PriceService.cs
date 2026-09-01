@@ -42,6 +42,18 @@ public class PriceService
         return await db.ContractItems.Select(i => i.TypeId).Distinct().ToListAsync(ct);
     }
 
+    /// <summary>Drop type ids whose Jita prices are fresh (&lt;1 h old).</summary>
+    public async Task<List<int>> FilterStaleAsync(List<int> typeIds, CancellationToken ct = default)
+    {
+        if (typeIds.Count == 0) return typeIds;
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var cutoff = DateTime.UtcNow.AddHours(-1);
+        var fresh = await db.Prices.Where(p => typeIds.Contains(p.TypeId) && p.PricesUpdatedAt > cutoff)
+            .Select(p => p.TypeId).ToListAsync(ct);
+        return typeIds.Except(fresh).ToList();
+    }
+
     public async Task RefreshPricesAsync(IReadOnlyList<int> typeIds, CancellationToken ct = default)
     {
         if (typeIds.Count == 0) return;
