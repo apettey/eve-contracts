@@ -23,6 +23,13 @@ public record OwnRow(long Id, string Dir, string Title, string Type, string Rout
 
 public record CharacterRow(int CharacterId, string Name, bool Authed, int Count);
 
+public record OwnItemDetail(string Name, long Qty, bool Included, double JitaSell);
+
+public record OwnContractDetail(
+    OwnRow Row, DateTime DateIssued, double VolumeM3, int DaysToComplete,
+    double Price, double Reward, double Collateral, double Buyout,
+    IReadOnlyList<OwnItemDetail> Items, bool ItemsAvailable);
+
 /// <summary>
 /// Read-side queries for the UI. Everything hits the local cache — never ESI.
 /// The scanner keeps an in-memory snapshot of all evaluated rows for the active
@@ -79,6 +86,9 @@ public class ContractQueryService
             finally { _snapLock.Release(); }
         }
 
+        snap ??= _snap;
+        if (snap is null) return (new List<ScannerRow>(), new ScannerStats(0, 0, 0, 0));
+
         var now = DateTime.UtcNow;
         var minMargin = f.MinMarginPct / 100.0;
         var rows = new List<ScannerRow>(512);
@@ -117,7 +127,9 @@ public class ContractQueryService
             .Where(c => c.RegionId == regionId && c.DateExpired > now && c.ItemsFetched)
             .Where(c => c.Verdict != "EXCLUDED" && c.Verdict != "PENDING");
 
+        // SCAM rows sink below everything else; the rest keep profit-desc order.
         var list = await live.OrderByDescending(c => c.NetProfit).ToListAsync(ct);
+        list = list.OrderBy(c => c.Verdict == "SCAM" ? 1 : 0).ThenByDescending(c => c.NetProfit).ToList();
         var items = await live
             .Join(db.ContractItems.AsNoTracking(), C => C.ContractId, I => I.ContractId, (C, I) => I)
             .ToListAsync(ct);
@@ -212,6 +224,46 @@ public class ContractQueryService
                 o.Type == "courier" ? o.Reward : o.Price,
                 o.Collateral, o.DateExpired, o.DateCompleted, PrettyStatus(o.Status)))
             .ToList();
+    }
+
+    public async Task<OwnContractDetail?> GetOwnDetailAsync(long ownRowId, CancellationToken ct = default)
+    {
+        if (!_static.Ready) await _static.LoadAsync(ct);
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var o = await db.OwnContracts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ownRowId, ct);
+        if (o is null) return null;
+
+        // ESI returns one record per stack; collapse identical types for display.
+        var items = (await db.OwnContractItems.AsNoTracking()
+                .Where(i => i.OwnContractId == ownRowId).ToListAsync(ct))
+            .GroupBy(i => (i.TypeId, i.IsIncluded))
+            .Select(g => new OwnContractItem
+            {
+                TypeId = g.Key.TypeId,
+                IsIncluded = g.Key.IsIncluded,
+                Quantity = g.Sum(x => x.Quantity),
+            })
+            .ToList();
+        var typeIds = items.Select(i => i.TypeId).Distinct().ToList();
+        var prices = typeIds.Count == 0
+            ? new Dictionary<int, Price>()
+            : await db.Prices.Where(p => typeIds.Contains(p.TypeId)).ToDictionaryAsync(p => p.TypeId, ct);
+
+        var row = new OwnRow(o.Id, o.Direction, o.Title, PrettyType(o.Type), o.Route,
+            o.CharacterName, o.OtherParty,
+            o.Type == "courier" ? o.Reward : o.Price,
+            o.Collateral, o.DateExpired, o.DateCompleted, PrettyStatus(o.Status));
+
+        var itemDetails = items
+            .OrderByDescending(i => i.IsIncluded)
+            .ThenByDescending(i => (prices.TryGetValue(i.TypeId, out var pv) ? pv.JitaSell : 0) * i.Quantity)
+            .Select(i => new OwnItemDetail(TypeName(i.TypeId), i.Quantity, i.IsIncluded,
+                prices.TryGetValue(i.TypeId, out var p) ? p.JitaSell : 0))
+            .ToList();
+
+        return new OwnContractDetail(row, o.DateIssued, o.VolumeM3, o.DaysToComplete,
+            o.Price, o.Reward, o.Collateral, o.Buyout, itemDetails, o.ItemsFetched);
     }
 
     public async Task<(double outstanding, double collateral, int completed30d, int expiring24h)> GetOwnStatsAsync(CancellationToken ct = default)

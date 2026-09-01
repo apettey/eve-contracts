@@ -176,6 +176,9 @@ public class EsiCharacterContract
     public DateTime DateExpired { get; set; }
     public DateTime? DateCompleted { get; set; }
     public bool ForCorporation { get; set; }
+    public double? Volume { get; set; }
+    public int? DaysToComplete { get; set; }
+    public double? Buyout { get; set; }
 }
 
 public class EsiMarketHistoryDay

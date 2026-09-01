@@ -70,7 +70,7 @@ public class EvaluationTests
     [Fact]
     public void LowVolumeItem_IsLowVol()
     {
-        var r = EvaluationService.Evaluate(Contract(100e6, items: Ship(300e6, vol: 5)), Defaults);
+        var r = EvaluationService.Evaluate(Contract(100e6, items: Ship(300e6, buy: 250e6, vol: 5)), Defaults);
         Assert.Equal("LOW VOL", r.Verdict);
         Assert.Contains("LOW_VOLUME_ITEM", r.Flags);
     }
@@ -78,7 +78,7 @@ public class EvaluationTests
     [Fact]
     public void PerItemVolumeOverride_Wins()
     {
-        var item = Ship(300e6, vol: 5) with { MinVolumeOverride = 2 };
+        var item = Ship(300e6, buy: 250e6, vol: 5) with { MinVolumeOverride = 2 };
         var r = EvaluationService.Evaluate(Contract(100e6, items: item), Defaults);
         Assert.Equal("BUY", r.Verdict);
     }
@@ -138,6 +138,59 @@ public class EvaluationTests
     {
         var r = EvaluationService.Evaluate(Contract(900e6, items: Ship(2e9)), Defaults);
         Assert.Equal("EXCLUDED", r.Verdict);
+    }
+
+    [Fact]
+    public void IlliquidItem_ValuedAtJitaBuy_NotSellWall()
+    {
+        // Officer mod: fake 60B sell wall, real 2.6B buy orders, ~0 daily volume.
+        var officer = Ship(60e9, buy: 2.6e9, vol: 1);
+        var r = EvaluationService.Evaluate(Contract(2e9, items: officer), Defaults with { MaxPrice = 100e9 });
+        Assert.Equal(2.6e9, r.JitaSellValue, 3); // buy max, not the wall
+        Assert.Equal("LOW VOL", r.Verdict);
+    }
+
+    [Fact]
+    public void FreeBaitContract_IsScam()
+    {
+        var officer = Ship(60e9, buy: 2.6e9, vol: 1);
+        var r = EvaluationService.Evaluate(Contract(0, items: officer), Defaults);
+        Assert.Equal("SCAM", r.Verdict);
+        Assert.Contains("TOO_GOOD", r.Flags);
+    }
+
+    [Fact]
+    public void TooGoodIlliquid_IsScam_ButLiquidSnipePasses()
+    {
+        // Illiquid + 25x return: scam.
+        var illiquid = Ship(3e9, buy: 2.6e9, vol: 1);
+        Assert.Equal("SCAM", EvaluationService.Evaluate(Contract(100e6, items: illiquid), Defaults).Verdict);
+
+        // Liquid + 13x return: genuine mispriced snipe — flagged, not blocked.
+        var liquid = Ship(15e9, buy: 14e9, vol: 200);
+        var r = EvaluationService.Evaluate(Contract(1e9, items: liquid), Defaults with { MaxPrice = 100e9 });
+        Assert.Equal("BUY", r.Verdict);
+        Assert.Contains("TOO_GOOD", r.Flags);
+    }
+
+    [Fact]
+    public void UnpricedRequestedItem_IsScam()
+    {
+        var give = Ship(300e6);
+        var want = Ship(0, buy: 0) with { IsIncluded = false };
+        var r = EvaluationService.Evaluate(Contract(100e6, items: [give, want]), Defaults);
+        Assert.Equal("SCAM", r.Verdict);
+        Assert.Contains("UNPRICED_REQUESTED", r.Flags);
+    }
+
+    [Fact]
+    public void RequestedItems_CostAtAcquisitionPrice()
+    {
+        // Handing over an item costs its Jita SELL (you buy it off sell orders).
+        var give = Ship(300e6);
+        var want = Ship(80e6, buy: 50e6) with { IsIncluded = false };
+        var r = EvaluationService.Evaluate(Contract(100e6, items: [give, want]), Defaults);
+        Assert.Equal(300e6 - 80e6, r.JitaSellValue, 3);
     }
 
     [Fact]

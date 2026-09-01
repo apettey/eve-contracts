@@ -79,7 +79,8 @@
                 <div class="empty-state"><div>no contracts match the current filters</div></div>
             }
             <Virtualize Items="_rows" Context="oc" ItemSize="63" OverscanCount="10">
-                <div class="own-grid own-row" @key="oc.Id">
+                <div class="own-grid own-row @(Ui.SelectedOwnId == oc.Id ? "sel" : "")" style="cursor:pointer;"
+                     @key="oc.Id" @onclick="@(() => SelectRow(oc.Id))">
                     <div><span class="badge @(oc.Dir == "OUT" ? "violet" : "green")">@oc.Dir</span></div>
                     <div class="cell-title">
                         <span class="t">@oc.Title</span>
@@ -95,6 +96,11 @@
             </Virtualize>
         </div>
     </div>
+
+    @if (_detail is not null)
+    {
+        <OwnDetailPanel Detail="_detail" ItemsError="@_itemsError" OnClose="ClearSelection" />
+    }
 </div>
 
 @code {
@@ -105,6 +111,8 @@
     private List<OwnRow> _rows = [];
     private int _totalCount, _expiredCount, _completed30, _expiring24;
     private double _outstanding, _collateral;
+    private OwnContractDetail? _detail;
+    private string? _itemsError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -133,6 +141,32 @@
 
     private async Task SetDir(string d) { Ui.DirFilter = d; await ReloadAsync(); }
     private async Task SetStatus(string s) { Ui.StatusFilter = s; await ReloadAsync(); }
+
+    private async Task SelectRow(long id)
+    {
+        if (Ui.SelectedOwnId == id) { ClearSelection(); return; }
+        Ui.SelectedOwnId = id;
+        _itemsError = null;
+        // Show terms immediately; items stream in after the (cached-after-first) ESI fetch.
+        _detail = await Query.GetOwnDetailAsync(id);
+        StateHasChanged();
+        if (_detail is { ItemsAvailable: false })
+        {
+            var ok = await OwnSync.EnsureItemsAsync(id);
+            if (Ui.SelectedOwnId != id) return; // user moved on
+            if (ok) _detail = await Query.GetOwnDetailAsync(id);
+            else _itemsError = "couldn't fetch items — token expired or ESI error";
+            StateHasChanged();
+        }
+    }
+
+    private void ClearSelection()
+    {
+        Ui.SelectedOwnId = null;
+        _detail = null;
+        _itemsError = null;
+        StateHasChanged();
+    }
 
     private async Task ReAuth()
     {

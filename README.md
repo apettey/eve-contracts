@@ -38,8 +38,11 @@ Everything lands in a local SQLite cache (`%LOCALAPPDATA%\EveContracts\evecontra
 2. highsec pickup check (when enabled)
 3. every included item above its Jita volume/day floor (per-item override supported)
 4. price ≤ max price cap
-5. `net = Σ sell×qty − price − fees(4.5%) − hauling(m³ × 800 ISK × (0.5 + jumps/10))`
-6. Verdict: LOWSEC → SKIP → LOW VOL → THIN → BUY
+5. `net = Σ value×qty − price − fees(4.5%) − hauling(m³ × 800 ISK × (0.5 + jumps/10))`
+   - liquid items are valued at Jita sell min; **illiquid items (below the volume floor) at Jita buy max** — the sell wall on a dead market is routinely a fake 10–100× order placed by the contract issuer
+   - requested (asked-for) items are costed at Jita **sell** — what it costs to acquire them, the gap swap-scams live in
+6. Verdict: LOWSEC → **SCAM** → SKIP → LOW VOL → THIN → BUY
+   - SCAM: free bait (price ≤ 0 offering value), unpriced requested items, or a >10× return on an illiquid item; SCAM rows sort below everything else. A >10× return on a *liquid* item stays eligible (genuine mispriced snipe) but carries a ⚑ TOO GOOD flag.
 
 ## Our Contracts setup
 

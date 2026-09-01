@@ -54,6 +54,7 @@ public class SyncScheduler : BackgroundService
             {
                 var db = scope.ServiceProvider.GetRequiredService<AppDb>();
                 await db.Database.EnsureCreatedAsync(ct);
+                await UpgradeSchemaAsync(db, ct);
             }
             await _settings.LoadAsync(ct);
 
@@ -133,6 +134,45 @@ public class SyncScheduler : BackgroundService
         SetStatus("scanning public contracts");
         await _publicSync.SyncRegionAsync(regionId, ct);
         SetStatus("ready");
+    }
+
+    /// <summary>
+    /// Additive schema upgrades for databases created by an older build. EnsureCreated
+    /// only builds schema for brand-new files, so new tables/columns are applied here;
+    /// each statement is safe to re-run (IF NOT EXISTS / duplicate-column swallowed).
+    /// </summary>
+    private static async Task UpgradeSchemaAsync(AppDb db, CancellationToken ct)
+    {
+        string[] statements =
+        [
+            """
+            CREATE TABLE IF NOT EXISTS OwnContractItems (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                OwnContractId INTEGER NOT NULL,
+                TypeId INTEGER NOT NULL,
+                Quantity INTEGER NOT NULL,
+                IsIncluded INTEGER NOT NULL)
+            """,
+            "CREATE INDEX IF NOT EXISTS IX_OwnContractItems_OwnContractId ON OwnContractItems (OwnContractId)",
+            "ALTER TABLE OwnContracts ADD COLUMN VolumeM3 REAL NOT NULL DEFAULT 0",
+            "ALTER TABLE OwnContracts ADD COLUMN DaysToComplete INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE OwnContracts ADD COLUMN Buyout REAL NOT NULL DEFAULT 0",
+            "ALTER TABLE OwnContracts ADD COLUMN ItemsFetched INTEGER NOT NULL DEFAULT 0",
+        ];
+        var conn = await Data.BulkOps.OpenAsync(db, ct);
+        foreach (var sql in statements)
+        {
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = sql;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.Message.Contains("duplicate column"))
+            {
+                // Column already present — fine.
+            }
+        }
     }
 
     /// <summary>Retention rule: purge contracts 3 days after they finished or should have finished.</summary>

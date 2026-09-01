@@ -229,6 +229,7 @@ input[type="checkbox"] { accent-color: var(--violet); }
 .own-grid { display: grid; grid-template-columns: 70px minmax(180px, 1.5fr) 1fr 1fr 90px 90px 80px 100px; gap: 14px; }
 .own-row { padding: 13px 28px; border-bottom: 1px solid var(--border-row); align-items: center; }
 .own-row:hover { background: var(--hover); }
+.own-row.sel { background: var(--selected); }
 
 /* ===== Modal ===== */
 .modal-overlay {

@@ -82,6 +82,19 @@ public class OwnContract
     public DateTime DateIssued { get; set; }
     public DateTime DateExpired { get; set; }
     public DateTime? DateCompleted { get; set; }
+    public double VolumeM3 { get; set; }
+    public int DaysToComplete { get; set; }
+    public double Buyout { get; set; }
+    public bool ItemsFetched { get; set; }
+}
+
+public class OwnContractItem
+{
+    public long Id { get; set; }
+    public long OwnContractId { get; set; }
+    public int TypeId { get; set; }
+    public long Quantity { get; set; }
+    public bool IsIncluded { get; set; }
 }
 
 public class ItemSetting

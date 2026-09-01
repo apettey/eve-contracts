@@ -69,9 +69,18 @@ public static class EvaluationService
             || (t.IncludeCharges && i.CategoryId == Categories.Charge);
         var scopeOk = included.Count > 0 && included.All(i => !i.Excluded && inScope(i));
 
-        // 5. Compute economics (always, so the UI can show them even on excluded rows)
-        var sellValue = included.Sum(i => i.JitaSell * i.Quantity)
-                      - requested.Sum(i => i.JitaBuy * i.Quantity);
+        // 5. Compute economics (always, so the UI can show them even on excluded rows).
+        // Illiquid items (below their volume floor) are valued at Jita BUY max — the
+        // sell-order minimum on a dead market is routinely a fake 10-100x wall placed
+        // by the same people issuing the "bargain" contract.
+        bool illiquid(EvalItem i) => i.PrevDayVolume <= (i.MinVolumeOverride ?? t.MinDailyVolume);
+        double includedUnitValue(EvalItem i) => illiquid(i) || i.JitaSell <= 0 ? i.JitaBuy : i.JitaSell;
+        // Requested items cost what it takes to ACQUIRE them (Jita sell), not what
+        // they dump for (buy) — swap scams live in that gap.
+        double requestedUnitCost(EvalItem i) => i.JitaSell > 0 ? i.JitaSell : i.JitaBuy;
+
+        var sellValue = included.Sum(i => includedUnitValue(i) * i.Quantity)
+                      - requested.Sum(i => requestedUnitCost(i) * i.Quantity);
         var totalM3 = included.Sum(i => i.PackagedVolumeM3 * i.Quantity);
         var fees = Math.Max(0, sellValue) * (t.FeePct / 100.0);
         var hauling = c.JumpsToJita <= 0 ? 0 : totalM3 * t.HaulRate * (0.5 + c.JumpsToJita / 10.0);
@@ -79,7 +88,16 @@ public static class EvaluationService
         var margin = c.Price > 0 ? netProfit / c.Price : 0;
 
         // 3. Volume gate: every included item above its per-item (or global) floor
-        var lowVol = included.Any(i => i.PrevDayVolume <= (i.MinVolumeOverride ?? t.MinDailyVolume));
+        var lowVol = included.Any(illiquid);
+
+        // Scam heuristics — these DO block (verdict SCAM) because they mark contracts
+        // whose computed profit cannot be trusted at all:
+        //  - free bait: price ≤ 0 while offering positive value
+        //  - too-good-to-be-true: >10x return on a real price
+        //  - unpriced requested items: we cannot cost what we would hand over
+        var unpricedRequested = requested.Any(i => i.JitaSell <= 0 && i.JitaBuy <= 0);
+        var freeBait = !wantToBuy && c.Price <= 0 && sellValue > 0;
+        var tooGood = freeBait || (c.Price > 0 && netProfit / c.Price > 10);
 
         // Risk flags (informational, never block)
         var titleLower = c.Title.ToLowerInvariant();
@@ -89,10 +107,17 @@ public static class EvaluationService
         if (lowVol) flags.Add("LOW_VOLUME_ITEM");
         if (c.SecurityStatus < 0.5) flags.Add("LOWSEC_PICKUP");
         if (included.Any(i => i.JitaSell <= 0)) flags.Add("UNPRICED_ITEM");
+        if (tooGood) flags.Add("TOO_GOOD");
+        if (unpricedRequested) flags.Add("UNPRICED_REQUESTED");
+
+        // A >10x return on a LIQUID item can be a genuine mispriced snipe — flag it but
+        // let it through; on an illiquid item it is noise on top of a fake valuation.
+        var scam = freeBait || unpricedRequested || (tooGood && lowVol);
 
         string verdict;
         if (!typeOk || wantToBuy || !scopeOk || c.Price > t.MaxPrice) verdict = "EXCLUDED";
         else if (t.HighsecOnly && c.SecurityStatus < 0.5) verdict = "LOWSEC";     // 2
+        else if (scam) verdict = "SCAM";
         else if (netProfit <= 0) verdict = "SKIP";
         else if (lowVol) verdict = "LOW VOL";
         else if (margin < t.MinMarginPct / 100.0) verdict = "THIN";

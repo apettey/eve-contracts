@@ -1,0 +1,106 @@
+@namespace EveContracts.App.Components
+
+<aside class="detail">
+    <div class="detail-hdr">
+        <div class="top">
+            <div>
+                <div class="t">@Detail.Row.Title</div>
+                <div class="sub">@Detail.Row.Type · @Detail.Row.Route</div>
+                <div class="sub">@Detail.Row.Character → @Detail.Row.Party</div>
+            </div>
+            <button class="close-btn" @onclick="OnClose">✕</button>
+        </div>
+        <div class="flag-row">
+            <span class="badge @(Detail.Row.Dir == "OUT" ? "violet" : "green")">@Detail.Row.Dir</span>
+            <span class="badge @StatusClass(Detail.Row.Status)">@Detail.Row.Status.ToUpperInvariant()</span>
+        </div>
+    </div>
+
+    <div class="detail-sec">
+        <div class="sec-lbl">Contract terms</div>
+        <div class="ledger">
+            @if (Detail.Price > 0)
+            {
+                <div class="line"><span>Price (buyer pays)</span><span class="v">@IskFormat.Short(Detail.Price)</span></div>
+            }
+            @if (Detail.Reward > 0)
+            {
+                <div class="line"><span>Reward (on delivery)</span><span class="v profit-pos">@IskFormat.Short(Detail.Reward)</span></div>
+            }
+            @if (Detail.Collateral > 0)
+            {
+                <div class="line"><span>Collateral</span><span class="v">@IskFormat.Short(Detail.Collateral)</span></div>
+            }
+            @if (Detail.Buyout > 0)
+            {
+                <div class="line"><span>Auction buyout</span><span class="v">@IskFormat.Short(Detail.Buyout)</span></div>
+            }
+            @if (Detail.Price <= 0 && Detail.Reward <= 0 && Detail.Collateral <= 0 && Detail.Buyout <= 0)
+            {
+                <div class="line"><span>No ISK terms</span><span class="v">—</span></div>
+            }
+            @if (Detail.VolumeM3 > 0)
+            {
+                <div class="line"><span>Cargo volume</span><span class="v">@Detail.VolumeM3.ToString("N0", Inv) m³</span></div>
+            }
+            @if (Detail.DaysToComplete > 0)
+            {
+                <div class="line"><span>Time to deliver</span><span class="v">@Detail.DaysToComplete d</span></div>
+            }
+            <div class="rule"></div>
+            <div class="sub"><span>Issued</span><span class="v mono">@Detail.DateIssued.ToString("yyyy-MM-dd HH:mm", Inv)</span></div>
+            <div class="sub">
+                <span>@(Detail.Row.Completed is null ? "Expires" : "Completed")</span>
+                <span class="v mono">@((Detail.Row.Completed ?? Detail.Row.Expires).ToString("yyyy-MM-dd HH:mm", Inv))</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="detail-sec">
+        <div class="sec-lbl">Items (@Detail.Items.Count(i => i.Included) offered@(Detail.Items.Any(i => !i.Included) ? $", {Detail.Items.Count(i => !i.Included)} asked" : ""))</div>
+        @if (!Detail.ItemsAvailable)
+        {
+            <div class="empty-state" style="padding:20px 0;">
+                <div>@(ItemsError ?? "loading items…")</div>
+            </div>
+        }
+        else if (Detail.Items.Count == 0)
+        {
+            <div class="empty-state" style="padding:20px 0;"><div>no items on this contract</div></div>
+        }
+        else
+        {
+            <div class="items-tbl">
+                <div class="items-grid items-head" style="grid-template-columns:1fr 90px;">
+                    <span>Item</span><span class="r">Jita sell</span>
+                </div>
+                @foreach (var it in Detail.Items)
+                {
+                    <div class="items-grid items-row" style="grid-template-columns:1fr 90px;">
+                        <div style="min-width:0;">
+                            <div class="n">@(it.Included ? "" : "⇐ asked: ")@it.Name</div>
+                            <div class="q">×@it.Qty.ToString("N0", Inv)</div>
+                        </div>
+                        <div class="v">@(it.JitaSell > 0 ? IskFormat.Short(it.JitaSell * it.Qty) : "—")</div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</aside>
+
+@code {
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+    [Parameter, EditorRequired] public OwnContractDetail Detail { get; set; } = null!;
+    [Parameter] public string? ItemsError { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private static string StatusClass(string status) => status switch
+    {
+        "Outstanding" => "violet",
+        "In progress" => "amber",
+        "Finished" => "green",
+        "Expired" or "Deleted" or "Cancelled" => "dim",
+        _ => "red",
+    };
+}

@@ -21,6 +21,7 @@ public class UiState
     public int? CharacterFilter { get; set; }
     public string DirFilter { get; set; } = "All";
     public string StatusFilter { get; set; } = "All";
+    public long? SelectedOwnId { get; set; }
 
     public bool SettingsOpen { get; set; }
 }

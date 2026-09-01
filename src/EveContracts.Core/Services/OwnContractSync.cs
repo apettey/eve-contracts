@@ -83,7 +83,7 @@ public class OwnContractSync
             row.CharacterName = ch.Name;
             row.Direction = isIssuer ? "OUT" : "IN";
             row.Type = c.Type;
-            row.Title = string.IsNullOrWhiteSpace(c.Title) ? $"[{c.Type}]" : c.Title!;
+            row.Title = string.IsNullOrWhiteSpace(c.Title) ? "(no title)" : c.Title!;
             row.Status = c.Status;
             row.Price = c.Price ?? 0;
             row.Reward = c.Reward ?? 0;
@@ -91,6 +91,9 @@ public class OwnContractSync
             row.DateIssued = c.DateIssued;
             row.DateExpired = c.DateExpired;
             row.DateCompleted = c.DateCompleted;
+            row.VolumeM3 = c.Volume ?? 0;
+            row.DaysToComplete = c.DaysToComplete ?? 0;
+            row.Buyout = c.Buyout ?? 0;
             var otherId = isIssuer ? (c.AcceptorId != 0 ? c.AcceptorId : c.AssigneeId) : c.IssuerId;
             row.OtherParty = otherId == 0 ? "Public" : names.GetValueOrDefault(otherId, $"#{otherId}");
             var startName = c.StartLocationId is long sl ? stationNames.GetValueOrDefault(sl, "Structure") : "?";
@@ -117,6 +120,61 @@ public class OwnContractSync
     {
         var parts = stationName.Split(" - ");
         return parts.Length > 1 ? parts[0] : stationName;
+    }
+
+    /// <summary>
+    /// Lazily fetch the item list for one own contract (first click in the UI).
+    /// Contract contents are immutable, so once fetched they are cached for good.
+    /// Returns false when items could not be fetched (expired token, ESI error).
+    /// </summary>
+    public async Task<bool> EnsureItemsAsync(long ownRowId, CancellationToken ct = default)
+    {
+        int characterId;
+        long contractId;
+        using (var scope = _scopes.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+            var row = await db.OwnContracts.AsNoTracking().FirstOrDefaultAsync(o => o.Id == ownRowId, ct);
+            if (row is null) return false;
+            if (row.ItemsFetched) return true;
+            characterId = row.CharacterId;
+            contractId = row.ContractId;
+        }
+
+        var token = await _auth.GetAccessTokenAsync(characterId, ct);
+        if (token is null) return false;
+
+        List<EsiContractItem> items;
+        try
+        {
+            var resp = await _esi.GetAsync<List<EsiContractItem>>(
+                $"/characters/{characterId}/contracts/{contractId}/items/", accessToken: token, ct: ct);
+            items = resp.Data ?? [];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning("Own-contract item fetch failed for {Id}: {Error}", contractId, ex.Message);
+            return false;
+        }
+
+        using (var scope = _scopes.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+            foreach (var it in items)
+            {
+                db.OwnContractItems.Add(new OwnContractItem
+                {
+                    OwnContractId = ownRowId,
+                    TypeId = it.TypeId,
+                    Quantity = it.Quantity,
+                    IsIncluded = it.IsIncluded ?? true,
+                });
+            }
+            var row = await db.OwnContracts.FirstOrDefaultAsync(o => o.Id == ownRowId, ct);
+            if (row is not null) row.ItemsFetched = true;
+            await db.SaveChangesAsync(ct);
+        }
+        return true;
     }
 
     private async Task<Dictionary<int, string>> ResolveNamesAsync(List<int> ids, CancellationToken ct)

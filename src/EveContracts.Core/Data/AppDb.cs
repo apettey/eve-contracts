@@ -12,6 +12,7 @@ public class AppDb : DbContext
     public DbSet<Price> Prices => Set<Price>();
     public DbSet<Character> Characters => Set<Character>();
     public DbSet<OwnContract> OwnContracts => Set<OwnContract>();
+    public DbSet<OwnContractItem> OwnContractItems => Set<OwnContractItem>();
     public DbSet<ItemSetting> ItemSettings => Set<ItemSetting>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ItemType> ItemTypes => Set<ItemType>();
@@ -43,6 +44,11 @@ public class AppDb : DbContext
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.ContractId, x.CharacterId }).IsUnique();
             e.HasIndex(x => x.Status);
+        });
+        b.Entity<OwnContractItem>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.OwnContractId);
         });
         b.Entity<ItemSetting>().HasKey(x => x.TypeId);
         b.Entity<AppSetting>().HasKey(x => x.Key);
