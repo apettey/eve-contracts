@@ -3,7 +3,6 @@ using EveContracts.Core.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using SharpCompress.Compressors.BZip2;
 
 namespace EveContracts.Core.Sde;
 
@@ -11,11 +10,11 @@ namespace EveContracts.Core.Sde;
 /// Downloads the EVE static data export (Fuzzwork CSV conversion) on first run and
 /// re-downloads when stale (game patches change item data). Loads types, groups,
 /// packaged volumes, solar systems, stations, and computes jumps-to-Jita offline
-/// via BFS over the stargate graph — no ESI route calls needed.
+/// via BFS over the stargate graph - no ESI route calls needed.
 /// </summary>
 public class SdeService
 {
-    private const string DumpBase = "https://www.fuzzwork.co.uk/dump/latest/";
+    private const string DumpBase = "https://www.fuzzwork.co.uk/dump/latest/csv/";
     public static readonly TimeSpan MaxAge = TimeSpan.FromDays(7);
 
     public static readonly IReadOnlyDictionary<string, int> Regions = new Dictionary<string, int>
@@ -60,13 +59,13 @@ public class SdeService
     public async Task DownloadAndLoadAsync(CancellationToken ct = default)
     {
         var http = _httpFactory.CreateClient("sde");
-        string[] files = ["invTypes.csv.bz2", "invGroups.csv.bz2", "invVolumes.csv.bz2",
-                          "mapSolarSystems.csv.bz2", "staStations.csv.bz2", "mapSolarSystemJumps.csv.bz2"];
+        string[] files = ["invTypes.csv", "invGroups.csv", "invVolumes.csv",
+                          "mapSolarSystems.csv", "staStations.csv", "mapSolarSystemJumps.csv"];
         foreach (var f in files)
         {
             ct.ThrowIfCancellationRequested();
             var dest = Path.Combine(AppPaths.SdeDir, f);
-            Progress?.Invoke($"Downloading {f}…");
+            Progress?.Invoke($"Downloading {f}...");
             _log.LogInformation("SDE: downloading {File}", f);
             using var resp = await http.GetAsync(DumpBase + f, HttpCompletionOption.ResponseHeadersRead, ct);
             resp.EnsureSuccessStatusCode();
@@ -80,23 +79,23 @@ public class SdeService
 
     public async Task LoadFromDiskAsync(CancellationToken ct = default)
     {
-        Progress?.Invoke("Parsing static data…");
+        Progress?.Invoke("Parsing static data...");
         var groups = new Dictionary<int, int>(); // groupID -> categoryID
-        foreach (var row in ReadCsv("invGroups.csv.bz2", out var gCols))
+        foreach (var row in ReadCsv("invGroups.csv", out var gCols))
         {
             if (int.TryParse(row[gCols["groupID"]], out var gid) && int.TryParse(row[gCols["categoryID"]], out var cid))
                 groups[gid] = cid;
         }
 
         var packaged = new Dictionary<int, double>();
-        foreach (var row in ReadCsv("invVolumes.csv.bz2", out var vCols))
+        foreach (var row in ReadCsv("invVolumes.csv", out var vCols))
         {
             if (int.TryParse(row[vCols["typeID"]], out var tid) && double.TryParse(row[vCols["volume"]], System.Globalization.CultureInfo.InvariantCulture, out var vol))
                 packaged[tid] = vol;
         }
 
         var types = new List<ItemType>(50_000);
-        foreach (var row in ReadCsv("invTypes.csv.bz2", out var tCols))
+        foreach (var row in ReadCsv("invTypes.csv", out var tCols))
         {
             if (!int.TryParse(row[tCols["typeID"]], out var tid)) continue;
             if (row[tCols["published"]] != "1") continue;
@@ -114,7 +113,7 @@ public class SdeService
         }
 
         var systems = new List<SolarSystem>(9_000);
-        foreach (var row in ReadCsv("mapSolarSystems.csv.bz2", out var sCols))
+        foreach (var row in ReadCsv("mapSolarSystems.csv", out var sCols))
         {
             if (!int.TryParse(row[sCols["solarSystemID"]], out var sid)) continue;
             int.TryParse(row[sCols["regionID"]], out var rid);
@@ -123,7 +122,7 @@ public class SdeService
         }
 
         var stations = new List<Station>(6_000);
-        foreach (var row in ReadCsv("staStations.csv.bz2", out var stCols))
+        foreach (var row in ReadCsv("staStations.csv", out var stCols))
         {
             if (!long.TryParse(row[stCols["stationID"]], out var stid)) continue;
             int.TryParse(row[stCols["solarSystemID"]], out var ssid);
@@ -131,9 +130,9 @@ public class SdeService
         }
 
         // BFS jumps-to-Jita over the stargate graph
-        Progress?.Invoke("Computing routes to Jita…");
+        Progress?.Invoke("Computing routes to Jita...");
         var adj = new Dictionary<int, List<int>>();
-        foreach (var row in ReadCsv("mapSolarSystemJumps.csv.bz2", out var jCols))
+        foreach (var row in ReadCsv("mapSolarSystemJumps.csv", out var jCols))
         {
             if (int.TryParse(row[jCols["fromSolarSystemID"]], out var from) && int.TryParse(row[jCols["toSolarSystemID"]], out var to))
             {
@@ -158,7 +157,7 @@ public class SdeService
         foreach (var s in systems)
             s.JumpsToJita = dist.TryGetValue(s.SolarSystemId, out var d) ? d : -1;
 
-        Progress?.Invoke("Saving static data…");
+        Progress?.Invoke("Saving static data...");
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -180,9 +179,7 @@ public class SdeService
     private IEnumerable<string[]> ReadCsv(string file, out Dictionary<string, int> cols)
     {
         var path = Path.Combine(AppPaths.SdeDir, file);
-        var stream = File.OpenRead(path);
-        var bz = new BZip2Stream(stream, SharpCompress.Compressors.CompressionMode.Decompress, decompressConcatenated: true);
-        var reader = new StreamReader(bz);
+        var reader = new StreamReader(File.OpenRead(path));
         var enumerator = Csv.ReadRecords(reader).GetEnumerator();
         if (!enumerator.MoveNext()) { cols = []; return []; }
         var header = enumerator.Current;

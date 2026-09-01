@@ -4,6 +4,7 @@
     <Project Path="src/EveContracts.Core/EveContracts.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/EveContracts.Bench/EveContracts.Bench.csproj" />
     <Project Path="tests/EveContracts.Tests/EveContracts.Tests.csproj" />
   </Folder>
 </Solution>

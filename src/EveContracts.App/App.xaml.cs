@@ -35,6 +35,8 @@ public partial class App : Application
             .ConfigureLogging(l =>
             {
                 l.SetMinimumLevel(LogLevel.Information);
+                l.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
+                l.AddFilter("System.Net.Http", LogLevel.Warning);
                 l.AddProvider(new FileLoggerProvider());
             })
             .ConfigureServices(services =>
@@ -65,6 +67,9 @@ public partial class App : Application
                 {
                     c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "EveContracts/1.0 (admin@pettey.me)");
                     c.Timeout = TimeSpan.FromMinutes(10);
+                }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+                {
+                    AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
                 });
                 services.AddHttpClient("sso", c =>
                 {
