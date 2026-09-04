@@ -7,14 +7,26 @@ Windows desktop app (.NET 10, WPF + Blazor Hybrid) for monitoring EVE Online con
 
 The UI is a pixel-faithful port of the design in [`design_handoff_contract_tracker/`](design_handoff_contract_tracker/README.md).
 
-## Build & run
+## Install
+
+Grab `ContractTracker-win-Setup.exe` from the **installer** artifact of any [Actions run](../../actions) (or from a Release once one is tagged) and run it. Installed copies check GitHub Releases on startup and every 6 h; when a new `v*` release exists, an update chip appears in the header — one click downloads (delta when possible) and restarts into the new version.
+
+Releasing a version:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+CI builds, tests, and attaches the installer + update packages + a portable zip to the GitHub Release.
+
+## Build & run from source
 
 ```
 dotnet build
 dotnet run --project src/EveContracts.App
 ```
 
-Requires the .NET 10 SDK and the WebView2 runtime (preinstalled on Windows 11).
+Requires the .NET 10 SDK and the WebView2 runtime (preinstalled on Windows 11). Dev and portable-zip runs never self-update — only installed copies do.
 
 ## First run
 
