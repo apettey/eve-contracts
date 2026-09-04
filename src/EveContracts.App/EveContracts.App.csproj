@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
     <RootNamespace>EveContracts.App</RootNamespace>
     <ApplicationTitle>Contract Tracker</ApplicationTitle>
+    <!-- Source of truth for local builds; bumped by scripts/release.ps1. CI overrides with -p:Version from the tag. -->
+    <Version>0.0.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

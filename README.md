@@ -13,11 +13,11 @@ Grab `ContractTracker-win-Setup.exe` from the **installer** artifact of any [Act
 
 Releasing a version:
 
-```bash
-git tag v1.0.0 && git push origin v1.0.0
+```powershell
+.\scripts\release.ps1             # patch bump; or: minor | major | 1.4.0, -Watch to follow CI
 ```
 
-CI builds, tests, and attaches the installer + update packages + a portable zip to the GitHub Release.
+The script bumps `<Version>` in the app csproj (the local source of truth), runs the tests, commits, tags `vX.Y.Z`, and pushes — CI then builds, tests again, and attaches the installer + update packages + a portable zip to the GitHub Release that installed apps auto-update from.
 
 ## Build & run from source
 
