@@ -55,7 +55,7 @@ $default = ""
 try { $default = (git symbolic-ref refs/remotes/origin/HEAD 2>$null) -replace '.*/', '' } catch { }
 if (-not $default) { $default = $branch }
 if ($branch -ne $default) { throw "On '$branch' but releases cut from '$default'. Switch branches first." }
-git pull --ff-only origin $branch
+git pull -q --ff-only origin $branch
 if ($LASTEXITCODE -ne 0) { throw "git pull failed." }
 if (git tag -l $tag) { throw "Tag $tag already exists." }
 
