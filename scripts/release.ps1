@@ -50,7 +50,9 @@ Write-Host "Releasing $tag  (was $cur)  [$([IO.Path]::GetFileName($Project))]" -
 # ---- guards ----
 if (git status --porcelain) { throw "Working tree not clean - commit or stash first." }
 $branch = git branch --show-current
-$default = (git symbolic-ref refs/remotes/origin/HEAD 2>$null) -replace '.*/', ''
+# origin/HEAD is unset on freshly created repos; fall back to the current branch.
+$default = ""
+try { $default = (git symbolic-ref refs/remotes/origin/HEAD 2>$null) -replace '.*/', '' } catch { }
 if (-not $default) { $default = $branch }
 if ($branch -ne $default) { throw "On '$branch' but releases cut from '$default'. Switch branches first." }
 git pull --ff-only origin $branch
