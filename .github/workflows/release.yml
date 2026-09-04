@@ -18,3 +18,4 @@ jobs:
       project: src/EveContracts.App/EveContracts.App.csproj
       app-name: ContractTracker
       test-project: tests/EveContracts.Tests/EveContracts.Tests.csproj
+      main-exe: EveContracts.App.exe

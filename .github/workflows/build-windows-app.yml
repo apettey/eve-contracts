@@ -50,6 +50,19 @@ on:
         required: false
         type: string
         default: ""
+      main-exe:
+        description: >-
+          Main executable name (e.g. MyApp.exe). When set, a Velopack installer
+          (Setup.exe + delta update packages) is built and, on tag builds,
+          published to the GitHub Release so installed apps auto-update.
+        required: false
+        type: string
+        default: ""
+      pack-id:
+        description: Velopack package id (defaults to app-name)
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -106,6 +119,46 @@ jobs:
           name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-${{ inputs.runtime }}
           path: ${{ env.ZIP_NAME }}
           retention-days: 30
+
+      # ---- Velopack installer + auto-update packages ----
+      - name: Velopack pack
+        if: inputs.main-exe != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dotnet tool install -g vpk
+          $packId = '${{ inputs.pack-id }}'
+          if (-not $packId) { $packId = '${{ inputs.app-name }}' }
+          # Previous releases enable delta packages; fails harmlessly before the first release.
+          vpk download github --repoUrl 'https://github.com/${{ github.repository }}' --token $env:GH_TOKEN
+          if ($LASTEXITCODE -ne 0) { Write-Host 'No previous release found - building full package only.' }
+          vpk pack --packId $packId `
+            --packVersion '${{ steps.version.outputs.version }}' `
+            --packDir publish `
+            --mainExe '${{ inputs.main-exe }}'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload installer artifact
+        if: inputs.main-exe != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-installer
+          path: Releases/
+          retention-days: 30
+
+      - name: Publish Velopack packages to release (tag builds)
+        if: inputs.main-exe != '' && steps.version.outputs.release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vpk upload github --repoUrl 'https://github.com/${{ github.repository }}' `
+            --token $env:GH_TOKEN `
+            --publish `
+            --releaseName '${{ inputs.app-name }} ${{ github.ref_name }}' `
+            --tag '${{ github.ref_name }}'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Release (tag builds)
         if: steps.version.outputs.release == 'true'

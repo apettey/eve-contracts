@@ -22,6 +22,10 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // Velopack hooks must run before anything else: they handle the
+        // install/update/uninstall lifecycle events and exit early during them.
+        Velopack.VelopackApp.Build().Run();
+
         base.OnStartup(e);
 
         DispatcherUnhandledException += (_, args) =>
@@ -97,6 +101,8 @@ public partial class App : Application
                 services.AddHostedService(sp => sp.GetRequiredService<SyncScheduler>());
                 services.AddSingleton<UiState>();
                 services.AddSingleton<AlertSoundService>();
+                services.AddSingleton<UpdateService>();
+                services.AddHostedService(sp => sp.GetRequiredService<UpdateService>());
             })
             .Build();
 
