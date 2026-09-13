@@ -16,16 +16,23 @@ updates:
     commit-message:
       prefix: "deps"
     groups:
-      # Bundle the Microsoft.* / EF Core / Extensions packages into one PR
+      # Bundle the Microsoft.* / EF Core / Extensions packages into one PR.
+      # Major bumps are left out so breaking changes get their own reviewable PR.
       microsoft:
         patterns:
           - "Microsoft.*"
           - "System.*"
-      # Bundle the test toolchain into one PR
+        update-types:
+          - "minor"
+          - "patch"
+      # Bundle the test toolchain into one PR (minor/patch only, as above).
       test-tooling:
         patterns:
           - "xunit*"
           - "Microsoft.NET.Test.Sdk"
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions used in .github/workflows/*
   - package-ecosystem: "github-actions"
