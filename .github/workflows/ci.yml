@@ -1,0 +1,39 @@
+# Build + test gate for pull requests (including Dependabot's).
+# The Release workflow ships tags; this one just proves a PR compiles and
+# passes tests, so it is safe to merge. Kept lightweight (no Velopack pack).
+name: CI
+
+on:
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: windows-latest # WPF app targets net10.0-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # No .sln in the repo, so build each project explicitly. The app pulls in
+      # Core; Bench also references Core and is built nowhere else, so compile it
+      # here to catch Core API changes (incl. Dependabot bumps) that break it.
+      - name: Build app
+        run: dotnet build src/EveContracts.App/EveContracts.App.csproj -c Release --nologo
+
+      - name: Build bench
+        run: dotnet build tests/EveContracts.Bench/EveContracts.Bench.csproj -c Release --nologo
+
+      - name: Test
+        run: dotnet test tests/EveContracts.Tests/EveContracts.Tests.csproj -c Release --nologo
