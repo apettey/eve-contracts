@@ -5,7 +5,9 @@ name: Release
 
 on:
   push:
-    branches: ["**"]
+    # Build every human branch, but not Dependabot's — those are covered by the
+    # lighter CI workflow on the PR, so we don't waste a full Velopack build per bump.
+    branches-ignore: ["dependabot/**"]
     tags: ["v*"]
   workflow_dispatch:
 
