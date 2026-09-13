@@ -70,9 +70,9 @@ jobs:
     permissions:
       contents: write # release upload on tag builds
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
@@ -115,7 +115,7 @@ jobs:
           "ZIP_NAME=$zip" >> $env:GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-${{ inputs.runtime }}
           path: ${{ env.ZIP_NAME }}
@@ -142,7 +142,7 @@ jobs:
 
       - name: Upload installer artifact
         if: inputs.main-exe != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-installer
           path: Releases/
