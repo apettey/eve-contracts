@@ -116,10 +116,13 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
+        # A storage-quota blip must never fail the build or block a release publish;
+        # the zip is a convenience download, not a release gate.
+        continue-on-error: true
         with:
           name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-${{ inputs.runtime }}
           path: ${{ env.ZIP_NAME }}
-          retention-days: 30
+          retention-days: 7
 
       # ---- Velopack installer + auto-update packages ----
       - name: Velopack pack
@@ -145,13 +148,16 @@ jobs:
             --mainExe '${{ inputs.main-exe }}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      # Only real releases keep an installer artifact; CI builds skip it to stay
+      # well under the Actions storage quota (the installer is ~3x the app zip).
       - name: Upload installer artifact
-        if: inputs.main-exe != ''
+        if: inputs.main-exe != '' && steps.version.outputs.release == 'true'
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-installer
           path: Releases/
-          retention-days: 30
+          retention-days: 7
 
       - name: Publish Velopack packages to release (tag builds)
         if: inputs.main-exe != '' && steps.version.outputs.release == 'true'
