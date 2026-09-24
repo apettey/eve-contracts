@@ -70,9 +70,9 @@ jobs:
     permissions:
       contents: write # release upload on tag builds
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
@@ -115,7 +115,7 @@ jobs:
           "ZIP_NAME=$zip" >> $env:GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         # A storage-quota blip must never fail the build or block a release publish;
         # the zip is a convenience download, not a release gate.
         continue-on-error: true
@@ -152,7 +152,7 @@ jobs:
       # well under the Actions storage quota (the installer is ~3x the app zip).
       - name: Upload installer artifact
         if: inputs.main-exe != '' && steps.version.outputs.release == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: ${{ inputs.app-name }}-${{ steps.version.outputs.version }}-installer
