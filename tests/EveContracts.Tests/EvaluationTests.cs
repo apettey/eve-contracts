@@ -254,6 +254,7 @@ public class EvaluationTests
 public class IskFormatTests
 {
     [Theory]
+    [InlineData(37.61e12, "37.61T")]
     [InlineData(1.45e9, "1.45B")]
     [InlineData(385e6, "385.0M")]
     [InlineData(22e3, "22K")]

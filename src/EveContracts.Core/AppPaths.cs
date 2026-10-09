@@ -6,7 +6,11 @@ public static class AppPaths
     {
         get
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EveContracts");
+            // EVECONTRACTS_DATA_DIR lets a dev build run against a copy of the data while the
+            // installed app keeps using the real one.
+            var dir = Environment.GetEnvironmentVariable("EVECONTRACTS_DATA_DIR") is { Length: > 0 } overrideDir
+                ? overrideDir
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EveContracts");
             Directory.CreateDirectory(dir);
             return dir;
         }

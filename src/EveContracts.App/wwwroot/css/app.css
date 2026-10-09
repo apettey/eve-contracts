@@ -125,6 +125,9 @@ input[type="checkbox"] { accent-color: var(--violet); }
 /* ===== Scanner table ===== */
 .tbl-wrap { flex: 1; overflow: auto; }
 .scan-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 1fr 90px 90px 90px 90px 70px 80px; gap: 14px; }
+.browse-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 84px 1fr 90px 100px 90px 70px 80px; gap: 14px; }
+.search-group { flex: 1; min-width: 220px; max-width: 420px; }
+input.search { width: 100%; }
 .tbl-head {
     padding: 10px 28px; font-size: 10px; letter-spacing: 0.1em; color: var(--dim);
     text-transform: uppercase; border-bottom: 1px solid var(--border-strong);
@@ -200,6 +203,8 @@ input[type="checkbox"] { accent-color: var(--violet); }
 .items-row .q { font-size: 10.5px; color: var(--dim); }
 .items-row .v { font-family: var(--mono); font-size: 12px; text-align: right; }
 .vol-low { color: var(--red); }
+.items-row.hit { background: var(--selected); }
+.items-row.hit .n { color: var(--violet); font-weight: 600; }
 .ledger { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .ledger .line { display: flex; justify-content: space-between; }
 .ledger .line span:first-child { color: var(--text-2); }

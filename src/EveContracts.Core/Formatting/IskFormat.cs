@@ -4,11 +4,12 @@ namespace EveContracts.Core.Formatting;
 
 public static class IskFormat
 {
-    /// <summary>1.45B / 385.0M / 22K style, minus sign U+2212 per the design spec.</summary>
+    /// <summary>2.10T / 1.45B / 385.0M / 22K style, minus sign U+2212 per the design spec.</summary>
     public static string Short(double n)
     {
         var abs = Math.Abs(n);
         var sign = n < 0 ? "−" : "";
+        if (abs >= 1e12) return sign + (abs / 1e12).ToString("0.00", CultureInfo.InvariantCulture) + "T";
         if (abs >= 1e9) return sign + (abs / 1e9).ToString("0.00", CultureInfo.InvariantCulture) + "B";
         if (abs >= 1e6) return sign + (abs / 1e6).ToString("0.0", CultureInfo.InvariantCulture) + "M";
         if (abs >= 1e3) return sign + (abs / 1e3).ToString("0", CultureInfo.InvariantCulture) + "K";

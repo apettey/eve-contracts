@@ -1,9 +1,10 @@
 # EVE Contract Tracker
 
-A Windows desktop app (.NET 10, WPF + Blazor Hybrid) for EVE Online contract work, with two jobs that share one local cache:
+A Windows desktop app (.NET 10, WPF + Blazor Hybrid) for EVE Online contract work, with three views over one local cache:
 
 1. **Profit Scanner** — sweeps every public contract in a region, prices the contents against Jita 4-4, and surfaces the ones you can buy and resell at a real profit — with scam contracts identified and sunk to the bottom.
-2. **Our Contracts** — one board for inbound/outbound contracts across 12+ authenticated characters, with terms, item manifests, and expiry tracking.
+2. **All Contracts** — every public contract in the region, searchable like the in-game contract browser.
+3. **Our Contracts** — one board for inbound/outbound contracts across 12+ authenticated characters, with terms, item manifests, and expiry tracking.
 
 The UI is a pixel-faithful port of the design in [`design_handoff_contract_tracker/`](design_handoff_contract_tracker/README.md); the performance work that makes it feel instant is documented in [OPTIMIZATIONS.md](OPTIMIZATIONS.md).
 
@@ -72,6 +73,19 @@ The **Value at** toggle switches the entire evaluation between two philosophies:
 - **Jita buy** — you dump everything into buy orders the moment you dock. This is the *instant-liquidation floor*: if a contract is still profitable on buy basis, the trade is essentially riskless.
 
 The screenshot above shows the same Forge scan on buy basis: passed filters drops to zero and the market's true spread becomes visible. Switching re-evaluates all ~40k contracts in about half a second.
+
+---
+
+## All Contracts
+
+The scanner deliberately hides most of the market (anything outside ships/modules, couriers, want-to-buy). **All Contracts** shows *everything* the region scan has cached — item exchanges, auctions and couriers — the same set you'd see in EVE's own contract search, but answered from the local cache in milliseconds:
+
+- **Search for several items at once** — commas separate terms, and every term must match: `raven, ballistic control` finds contracts holding a Raven *and* a Ballistic Control item. Words within a term must land in the same item (or the title, or a location), so `ballistic shield` won't falsely match a contract that merely has a Ballistic Control and a Shield Extender. Requested (⇐) items count too: `large skill injector, plex` finds LSI-for-PLEX swaps. Matched items lead each row's summary (`✓ 3× Hobgoblin I, …`) and are listed first and highlighted in the detail panel, so a hit inside a 500-item contract is still visible. ~6 ms over ~58k Forge contracts.
+- **Type** (All / Item Exchange / Auction / Courier), **Highsec only**, and **Sort** (newest, price ↑/↓, expiring soonest, net profit). Price ↑ puts 0-ISK want-to-buy rows last so the cheapest real offer is on top.
+- **Stats** — live contracts, matches, cheapest match, and total matching value.
+- **Detail** — the raw terms (price, auction buyout, courier reward/collateral/destination, volume, issued/expiry), the item list vs Jita, and the profit ledger. Contracts outside the scanner's scope carry no verdict, so a "profit" shown for them is only a Jita reference.
+
+The browser shares the scanner's region selection and its data, so it adds no ESI traffic.
 
 ---
 

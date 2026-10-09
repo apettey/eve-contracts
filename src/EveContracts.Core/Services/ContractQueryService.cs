@@ -16,7 +16,18 @@ public record ScannerStats(int Scanned, int Passed, double BestProfit, double To
 
 public record ItemDetail(string Name, long Qty, double M3, double Sell, double Buy, double VolPerDay, bool BelowFloor, bool Included);
 
-public record ContractDetail(ScannerRow Row, IReadOnlyList<ItemDetail> Items, double Fees, double Hauling, double TotalM3, string Liquidate);
+public record ContractDetail(ScannerRow Row, IReadOnlyList<ItemDetail> Items, double Fees, double Hauling, double TotalM3, string Liquidate,
+    BrowseRow Terms);
+
+/// <summary>Filter for the All Contracts browser. Type: All | Item Exchange | Auction | Courier.</summary>
+public record BrowseFilter(string Region, string Search, string Type, bool HighsecOnly, string Sort);
+
+public record BrowseRow(
+    long ContractId, string Type, string Title, string ItemsSummary, string System, string Station,
+    string Destination, double Sec, int Jumps, double Price, double Reward, double Collateral, double Buyout,
+    double VolumeM3, DateTime Issued, DateTime Expires, string Verdict, double Profit, bool ItemsFetched);
+
+public record BrowseStats(int Live, int Matching, double MatchingValue, double CheapestMatch);
 
 public record OwnRow(long Id, string Dir, string Title, string Type, string Route, string Character,
     string Party, double Value, double Collateral, DateTime Expires, DateTime? Completed, string Status);
@@ -42,12 +53,14 @@ public class ContractQueryService
     private readonly SettingsService _settings;
     private readonly StaticDataCache _static;
 
-    private sealed record Snapshot(int RegionId, List<ScannerRow> Rows, int ScannedCount);
-    private Snapshot? _snap;
-    private int _dirty = 1;
-    private DateTime _lastBuild = DateTime.MinValue;
-    private static readonly TimeSpan RebuildThrottle = TimeSpan.FromSeconds(2);
-    private readonly SemaphoreSlim _snapLock = new(1, 1);
+    private sealed record Snapshot(List<ScannerRow> Rows, int ScannedCount);
+    /// <summary>Searchable fields are lowercase: title, system, station, destination, then one per item stack.</summary>
+    /// <summary>All = every field joined, a cheap prefilter before the per-field match.</summary>
+    private sealed record BrowseEntry(BrowseRow Row, string[] Fields, string All, BrowseItem[] Items);
+    private sealed record BrowseItem(string Lower, string Label);
+    private const int LocationFieldCount = 4;
+    private readonly SnapshotCache<Snapshot> _scan;
+    private readonly SnapshotCache<List<BrowseEntry>> _browse;
 
     public ContractQueryService(IServiceScopeFactory scopes, SettingsService settings,
         StaticDataCache staticData, PublicContractSync publicSync)
@@ -55,39 +68,62 @@ public class ContractQueryService
         _scopes = scopes;
         _settings = settings;
         _static = staticData;
+        _scan = new SnapshotCache<Snapshot>(BuildSnapshotAsync);
+        _browse = new SnapshotCache<List<BrowseEntry>>(BuildBrowseAsync);
         publicSync.Updated += Invalidate;
     }
 
-    public void Invalidate() => Interlocked.Exchange(ref _dirty, 1);
+    public void Invalidate()
+    {
+        _scan.Invalidate();
+        _browse.Invalidate();
+    }
+
+    /// <summary>
+    /// Per-region in-memory snapshot. During heavy sync every chunk marks it dirty;
+    /// rebuilding at most every 2 s keeps the UI fresh without paying a full rebuild
+    /// per chunk. A region switch always rebuilds.
+    /// </summary>
+    private sealed class SnapshotCache<T>(Func<int, CancellationToken, Task<T>> build) where T : class
+    {
+        private static readonly TimeSpan RebuildThrottle = TimeSpan.FromSeconds(2);
+        private readonly SemaphoreSlim _lock = new(1, 1);
+        private (int RegionId, T Value)? _snap;
+        private int _dirty = 1;
+        private DateTime _lastBuild = DateTime.MinValue;
+
+        public void Invalidate() => Interlocked.Exchange(ref _dirty, 1);
+
+        public async Task<T> GetAsync(int regionId, CancellationToken ct)
+        {
+            var snap = _snap;
+            var mustBuild = snap is null || snap.Value.RegionId != regionId;
+            var mayBuild = Volatile.Read(ref _dirty) == 1 && DateTime.UtcNow - _lastBuild > RebuildThrottle;
+            if (!mustBuild && !mayBuild) return snap!.Value.Value;
+
+            await _lock.WaitAsync(ct);
+            try
+            {
+                snap = _snap;
+                if (snap is null || snap.Value.RegionId != regionId ||
+                    (DateTime.UtcNow - _lastBuild > RebuildThrottle && Interlocked.CompareExchange(ref _dirty, 0, 1) == 1))
+                {
+                    // Off the UI thread: a Forge-sized build is ~1 s of CPU after the DB reads.
+                    _snap = snap = (regionId, await Task.Run(() => build(regionId, ct), ct));
+                    _lastBuild = DateTime.UtcNow;
+                }
+                return snap.Value.Value;
+            }
+            finally { _lock.Release(); }
+        }
+    }
 
     private string TypeName(int typeId) => _static.Types.TryGetValue(typeId, out var t) ? t.Name : $"Type {typeId}";
 
     public async Task<(List<ScannerRow> rows, ScannerStats stats)> GetScannerRowsAsync(ScannerFilter f, CancellationToken ct = default)
     {
         var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
-        var snap = _snap;
-        // During heavy sync every chunk marks us dirty; rebuilding at most every 2 s
-        // keeps the UI fresh without paying a full rebuild per chunk.
-        var mustBuild = snap is null || snap.RegionId != regionId;
-        var mayBuild = Volatile.Read(ref _dirty) == 1 && DateTime.UtcNow - _lastBuild > RebuildThrottle;
-        if (mustBuild || mayBuild)
-        {
-            await _snapLock.WaitAsync(ct);
-            try
-            {
-                snap = _snap;
-                if (snap is null || snap.RegionId != regionId ||
-                    (DateTime.UtcNow - _lastBuild > RebuildThrottle && Interlocked.CompareExchange(ref _dirty, 0, 1) == 1))
-                {
-                    _snap = snap = await BuildSnapshotAsync(regionId, ct);
-                    _lastBuild = DateTime.UtcNow;
-                }
-            }
-            finally { _snapLock.Release(); }
-        }
-
-        snap ??= _snap;
-        if (snap is null) return (new List<ScannerRow>(), new ScannerStats(0, 0, 0, 0));
+        var snap = await _scan.GetAsync(regionId, ct);
 
         var now = DateTime.UtcNow;
         var minMargin = f.MinMarginPct / 100.0;
@@ -147,7 +183,142 @@ public class ContractQueryService
                 ParseFlags(c.FlagsJson));
         }).ToList();
 
-        return new Snapshot(regionId, rows, scanned);
+        return new Snapshot(rows, scanned);
+    }
+
+    /// <summary>
+    /// Every live public contract in the region — like EVE's own contract search,
+    /// nothing is hidden by scope or verdict. Filtering is in-memory over
+    /// precomputed lowercase fields; see <see cref="BrowseSearch"/> for the syntax.
+    /// When searching, matched items lead the row's summary so a hit buried in a
+    /// 500-item contract is still visible.
+    /// </summary>
+    public async Task<(List<BrowseRow> rows, BrowseStats stats)> GetBrowseRowsAsync(BrowseFilter f, CancellationToken ct = default)
+    {
+        var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
+        var snap = await _browse.GetAsync(regionId, ct);
+
+        var now = DateTime.UtcNow;
+        var terms = BrowseSearch.Parse(f.Search);
+        var typeKey = f.Type switch
+        {
+            "Item Exchange" => "item_exchange",
+            "Auction" => "auction",
+            "Courier" => "courier",
+            _ => null,
+        };
+
+        var rows = new List<BrowseRow>();
+        int live = 0;
+        double value = 0, cheapest = double.MaxValue;
+        foreach (var e in snap)
+        {
+            var r = e.Row;
+            if (r.Expires <= now) continue;
+            live++;
+            if (typeKey is not null && r.Type != typeKey) continue;
+            if (f.HighsecOnly && r.Sec < 0.45) continue; // EVE rounds 0.45+ to 0.5
+            if (terms.Length > 0)
+            {
+                if (!AllWordsPresent(terms, e.All) || !BrowseSearch.Matches(terms, e.Fields)) continue;
+                r = WithMatchedSummary(r, e, terms);
+            }
+            rows.Add(r);
+            var v = BrowseValue(r);
+            value += v;
+            if (v > 0 && v < cheapest) cheapest = v;
+        }
+
+        Comparison<BrowseRow> cmp = f.Sort switch
+        {
+            // 0-ISK rows (want-to-buy, swaps, unpopulated courier rewards) would otherwise flood the top.
+            "Price ↑" => (a, b) => (BrowseValue(a) <= 0).CompareTo(BrowseValue(b) <= 0) is var z and not 0
+                ? z : BrowseValue(a).CompareTo(BrowseValue(b)),
+            "Price ↓" => (a, b) => BrowseValue(b).CompareTo(BrowseValue(a)),
+            "Expiring soonest" => (a, b) => a.Expires.CompareTo(b.Expires),
+            "Net profit" => (a, b) => b.Profit.CompareTo(a.Profit),
+            _ => (a, b) => b.Issued.CompareTo(a.Issued), // Newest
+        };
+        rows.Sort(cmp);
+
+        return (rows, new BrowseStats(live, rows.Count, value, cheapest == double.MaxValue ? 0 : cheapest));
+    }
+
+    private static bool AllWordsPresent(string[][] terms, string all)
+    {
+        foreach (var t in terms)
+            if (!BrowseSearch.TermMatches(t, all)) return false;
+        return true;
+    }
+
+    private static BrowseRow WithMatchedSummary(BrowseRow r, BrowseEntry e, string[][] terms)
+    {
+        var matched = e.Items.Where(i => BrowseSearch.AnyTermMatches(terms, i.Lower)).ToList();
+        if (matched.Count == 0) return r; // matched on title/location only
+        const int max = 4;
+        var head = string.Join(", ", matched.Take(max).Select(i => i.Label));
+        var rest = e.Items.Length - Math.Min(matched.Count, max);
+        return r with { ItemsSummary = "✓ " + head + (rest > 0 ? $"  · +{rest} more" : "") };
+    }
+
+    /// <summary>What the contract is "worth" for sorting/stats: courier reward, otherwise price.</summary>
+    private static double BrowseValue(BrowseRow r) => r.Type == "courier" ? r.Reward : r.Price;
+
+    private async Task<List<BrowseEntry>> BuildBrowseAsync(int regionId, CancellationToken ct)
+    {
+        if (!_static.Ready) await _static.LoadAsync(ct);
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        var now = DateTime.UtcNow;
+
+        var live = db.PublicContracts.AsNoTracking().Where(c => c.RegionId == regionId && c.DateExpired > now);
+        var list = await live.ToListAsync(ct);
+        var items = await live
+            .Join(db.ContractItems.AsNoTracking(), C => C.ContractId, I => I.ContractId, (C, I) => I)
+            .ToListAsync(ct);
+        var itemsByContract = items.ToLookup(i => i.ContractId);
+
+        var result = new List<BrowseEntry>(list.Count);
+        foreach (var c in list)
+        {
+            var cItems = itemsByContract[c.ContractId];
+            // One entry per type+direction: ESI returns a record per stack.
+            var stacks = cItems.GroupBy(i => (i.TypeId, i.IsIncluded))
+                .Select(g =>
+                {
+                    var name = TypeName(g.Key.TypeId);
+                    var qty = g.Sum(i => i.Quantity);
+                    return new BrowseItem(name.ToLowerInvariant(),
+                        (g.Key.IsIncluded ? "" : "⇐ ") + (qty > 1 ? qty + "× " : "") + name);
+                })
+                .ToArray();
+            var fields = new string[LocationFieldCount + stacks.Length];
+            fields[0] = c.Title.ToLowerInvariant();
+            fields[1] = c.SystemName.ToLowerInvariant();
+            fields[2] = c.StationName.ToLowerInvariant();
+            fields[3] = c.DestinationName.ToLowerInvariant();
+            for (var k = 0; k < stacks.Length; k++) fields[LocationFieldCount + k] = stacks[k].Lower;
+            result.Add(new BrowseEntry(ToBrowseRow(c, cItems), fields, string.Join('\n', fields), stacks));
+        }
+        return result;
+    }
+
+    private BrowseRow ToBrowseRow(PublicContract c, IEnumerable<ContractItem> items)
+    {
+        var summary = c.Type == "courier" ? $"{c.VolumeM3.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} m³ to haul"
+            : !c.ItemsFetched ? "(items loading…)"
+            : items.Any(i => i.IsIncluded) ? SummarizeItems(items, TypeName, 4)
+            : "wants: " + SummarizeItems(items.Select(i => new ContractItem { TypeId = i.TypeId, Quantity = i.Quantity, IsIncluded = true }), TypeName, 4);
+        var title = !string.IsNullOrWhiteSpace(c.Title) ? c.Title
+            : c.Type == "courier" ? $"Courier → {ShortStation(c.DestinationName)}"
+            : c.ItemsFetched ? SummarizeItems(items, TypeName, 1)
+            : $"Contract {c.ContractId}";
+        // Only scanner-scope verdicts mean anything; EXCLUDED/PENDING rows carry no profit claim.
+        var evaluated = c.Verdict is not ("EXCLUDED" or "PENDING");
+        return new BrowseRow(c.ContractId, c.Type, title, summary,
+            c.SystemName, ShortStation(c.StationName), ShortStation(c.DestinationName),
+            c.SecurityStatus, c.JumpsToJita, c.Price, c.Reward, c.Collateral, c.Buyout, c.VolumeM3,
+            c.DateIssued, c.DateExpired, evaluated ? c.Verdict : "", evaluated ? c.NetProfit : 0, c.ItemsFetched);
     }
 
     public async Task<ContractDetail?> GetDetailAsync(long contractId, CancellationToken ct = default)
@@ -183,7 +354,7 @@ public class ContractQueryService
             c.Price, c.JitaSellValue, c.NetProfit, c.Margin, c.Verdict, c.DateExpired, ParseFlags(c.FlagsJson));
 
         return new ContractDetail(row, items, c.Fees, c.Hauling,
-            items.Where(i => i.Included).Sum(i => i.M3), liquidate);
+            items.Where(i => i.Included).Sum(i => i.M3), liquidate, ToBrowseRow(c, c.Items));
     }
 
     public async Task<List<CharacterRow>> GetCharactersAsync(CancellationToken ct = default)
@@ -305,6 +476,7 @@ public class ContractQueryService
 
     private static string ShortStation(string name)
     {
+        if (string.IsNullOrEmpty(name)) return "";
         if (name.Length <= 28) return name;
         var parts = name.Split(" - ");
         return parts.Length >= 2 ? parts[0] + " " + parts[^1] : name[..28];

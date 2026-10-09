@@ -173,6 +173,10 @@ public class SyncScheduler : BackgroundService
             "ALTER TABLE OwnContracts ADD COLUMN Buyout REAL NOT NULL DEFAULT 0",
             "ALTER TABLE OwnContracts ADD COLUMN ItemsFetched INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE ItemTypes ADD COLUMN IsRig INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE PublicContracts ADD COLUMN Collateral REAL NOT NULL DEFAULT 0",
+            "ALTER TABLE PublicContracts ADD COLUMN Buyout REAL NOT NULL DEFAULT 0",
+            "ALTER TABLE PublicContracts ADD COLUMN DestinationName TEXT NOT NULL DEFAULT ''",
+            RewardColumnSql,
         ];
         var conn = await Data.BulkOps.OpenAsync(db, ct);
         foreach (var sql in statements)
@@ -182,6 +186,15 @@ public class SyncScheduler : BackgroundService
                 await using var cmd = conn.CreateCommand();
                 cmd.CommandText = sql;
                 await cmd.ExecuteNonQueryAsync(ct);
+
+                // Courier/auction terms were added after contracts were already cached; drop the
+                // public-contract ETags once so the next scan re-upserts every row with them.
+                if (sql == RewardColumnSql)
+                {
+                    await using var reset = conn.CreateCommand();
+                    reset.CommandText = "DELETE FROM EsiEtags WHERE Url LIKE '/contracts/public/%'";
+                    await reset.ExecuteNonQueryAsync(ct);
+                }
             }
             catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.Message.Contains("duplicate column"))
             {
@@ -189,6 +202,8 @@ public class SyncScheduler : BackgroundService
             }
         }
     }
+
+    private const string RewardColumnSql = "ALTER TABLE PublicContracts ADD COLUMN Reward REAL NOT NULL DEFAULT 0";
 
     /// <summary>Retention rule: purge contracts 3 days after they finished or should have finished.</summary>
     public async Task PurgeAsync(CancellationToken ct = default)

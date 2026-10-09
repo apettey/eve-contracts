@@ -1,0 +1,256 @@
+@namespace EveContracts.App.Components
+@implements IDisposable
+@inject UiState Ui
+@inject ContractQueryService Query
+@inject PublicContractSync PublicSync
+@inject SettingsService Settings
+@inject SyncScheduler Scheduler
+
+<div class="view">
+    <div class="main-col">
+        <!-- Filter bar -->
+        <div class="filters">
+            <div class="fgroup search-group">
+                <label class="flabel">Search</label>
+                <input type="text" class="search" placeholder="e.g. raven, ballistic control"
+                       title="Comma-separated terms must ALL match. Words in one term must match the same item (or the title / a location)."
+                       value="@Ui.BrowseSearch" @oninput="OnSearch" />
+            </div>
+            <div class="fgroup">
+                <label class="flabel">Region</label>
+                <select value="@Ui.Region" @onchange="OnRegionChange">
+                    @foreach (var r in EveContracts.Core.Sde.SdeService.Regions.Keys)
+                    {
+                        <option value="@r">@r</option>
+                    }
+                </select>
+            </div>
+            <div class="fgroup">
+                <label class="flabel">Type</label>
+                <div class="slider-row" style="gap:6px;">
+                    @foreach (var t in TypeOptions)
+                    {
+                        <button class="pill @(Ui.BrowseType == t ? "active" : "")" @onclick="@(() => SetType(t))">@t</button>
+                    }
+                </div>
+            </div>
+            <div class="fgroup">
+                <label class="flabel">Sort</label>
+                <select value="@Ui.BrowseSort" @onchange="OnSort">
+                    @foreach (var s in SortOptions)
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+            <label class="chk">
+                <input type="checkbox" checked="@Ui.BrowseHighsecOnly" @onchange="OnHighsec" />
+                Highsec only
+            </label>
+        </div>
+
+        <!-- Stats strip -->
+        <div class="stats">
+            <div class="stat">
+                <div class="lbl">Live contracts</div>
+                <div class="val">@_stats.Live.ToString("N0", Inv)</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Matching</div>
+                <div class="val violet">@_stats.Matching.ToString("N0", Inv)</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Cheapest match</div>
+                <div class="val green">@(_stats.CheapestMatch > 0 ? IskFormat.Short(_stats.CheapestMatch) : "—")</div>
+            </div>
+            <div class="stat">
+                <div class="lbl">Matching value</div>
+                <div class="val">@IskFormat.Short(_stats.MatchingValue)</div>
+            </div>
+        </div>
+
+        <!-- Contract table -->
+        <div class="tbl-wrap">
+            <div class="browse-grid tbl-head">
+                <span>Contract</span><span>Type</span><span>Location</span><span class="r">Sec / Jumps</span>
+                <span class="r">Price</span><span class="r">Volume</span><span class="r">Expires</span><span class="r">Verdict</span>
+            </div>
+            @if (_rows.Count == 0)
+            {
+                <div class="empty-state">
+                    @if (!Scheduler.SdeReady)
+                    {
+                        <div>first run: downloading EVE static data…</div>
+                    }
+                    else
+                    {
+                        <div>no contracts match</div>
+                    }
+                    <div>@Scheduler.Status</div>
+                </div>
+            }
+            <Virtualize Items="_rows" Context="row" ItemSize="63" OverscanCount="10">
+                <div class="browse-grid tbl-row @(Ui.SelectedBrowseId == row.ContractId ? "sel" : "")"
+                     @key="row.ContractId" @onclick="@(() => Select(row.ContractId))">
+                    <div class="cell-title">
+                        <span class="t">@row.Title</span>
+                        @if (row.ItemsSummary != row.Title)
+                        {
+                            <span class="s">@row.ItemsSummary</span>
+                        }
+                    </div>
+                    <div><span class="badge @TypeClass(row.Type)">@TypeLabel(row.Type)</span></div>
+                    <div class="cell-loc">
+                        <span>@row.System</span>
+                        <span class="st">@(row.Type == "courier" && row.Destination != "" ? $"{row.Station} → {row.Destination}" : row.Station)</span>
+                    </div>
+                    <div class="r num-sm">
+                        <span class="@(row.Sec >= 0.45 ? "sec-hi" : "sec-lo")">@row.Sec.ToString("0.0", Inv)</span><span class="dimtxt"> · @(row.Jumps)j</span>
+                    </div>
+                    <div class="r num">
+                        @if (row.Type == "courier")
+                        {
+                            <span title="reward">@IskFormat.Short(row.Reward)</span>
+                            <div class="dimtxt num-sm" title="collateral">@IskFormat.Short(row.Collateral) coll.</div>
+                        }
+                        else
+                        {
+                            @IskFormat.Short(row.Price)
+                            @if (row.Buyout > 0)
+                            {
+                                <div class="dimtxt num-sm" title="buyout">@IskFormat.Short(row.Buyout) b/o</div>
+                            }
+                        }
+                    </div>
+                    <div class="r num-sm txt2">@row.VolumeM3.ToString("N0", Inv) m³</div>
+                    <div class="r num-sm">@IskFormat.Expiry(row.Expires, DateTime.UtcNow)</div>
+                    <div style="display:flex; justify-content:flex-end;">
+                        @if (row.Verdict != "")
+                        {
+                            <span class="badge @VerdictClass(row.Verdict)">@row.Verdict</span>
+                        }
+                    </div>
+                </div>
+            </Virtualize>
+        </div>
+    </div>
+
+    @if (_detail is not null)
+    {
+        <DetailPanel Detail="_detail" MinVolume="@Ui.MinVolume" FeePct="@Settings.FeePct" ShowTerms="true" Search="@Ui.BrowseSearch" OnClose="ClearSelection" />
+    }
+</div>
+
+@code {
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+    private static readonly string[] TypeOptions = ["All", "Item Exchange", "Auction", "Courier"];
+    private static readonly string[] SortOptions = ["Newest", "Price ↑", "Price ↓", "Expiring soonest", "Net profit"];
+    private List<BrowseRow> _rows = [];
+    private BrowseStats _stats = new(0, 0, 0, 0);
+    private ContractDetail? _detail;
+    private System.Threading.Timer? _debounce;
+
+    protected override async Task OnInitializedAsync()
+    {
+        PublicSync.Updated += OnDataUpdated;
+        await ReloadAsync();
+        if (Ui.SelectedBrowseId is long id) _detail = await Query.GetDetailAsync(id);
+    }
+
+    private BrowseFilter Filter => new(Ui.Region, Ui.BrowseSearch, Ui.BrowseType, Ui.BrowseHighsecOnly, Ui.BrowseSort);
+
+    private async Task ReloadAsync()
+    {
+        (_rows, _stats) = await Query.GetBrowseRowsAsync(Filter);
+        if (Ui.SelectedBrowseId is long id && _rows.All(r => r.ContractId != id))
+        {
+            Ui.SelectedBrowseId = null;
+            _detail = null;
+        }
+        StateHasChanged();
+    }
+
+    private void OnDataUpdated() => _ = InvokeAsync(ReloadAsync);
+
+    // Typing fires per keystroke; debounce the filter pass ~150 ms.
+    private void QueueReload()
+    {
+        _debounce?.Dispose();
+        _debounce = new System.Threading.Timer(_ => _ = InvokeAsync(ReloadAsync), null, 150, System.Threading.Timeout.Infinite);
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        Ui.BrowseSearch = e.Value?.ToString() ?? "";
+        QueueReload();
+    }
+
+    private async Task OnRegionChange(ChangeEventArgs e)
+    {
+        Ui.Region = e.Value?.ToString() ?? "The Forge";
+        await Settings.SetAsync("region", Ui.Region);
+        await ReloadAsync();
+        _ = Scheduler.RescanNowAsync(); // new region needs a fetch; UI shows cached rows meanwhile
+    }
+
+    private async Task SetType(string t)
+    {
+        Ui.BrowseType = t;
+        await ReloadAsync();
+    }
+
+    private async Task OnSort(ChangeEventArgs e)
+    {
+        Ui.BrowseSort = e.Value?.ToString() ?? "Newest";
+        await ReloadAsync();
+    }
+
+    private async Task OnHighsec(ChangeEventArgs e)
+    {
+        Ui.BrowseHighsecOnly = e.Value is bool b && b;
+        await ReloadAsync();
+    }
+
+    private async Task Select(long id)
+    {
+        Ui.SelectedBrowseId = id;
+        _detail = await Query.GetDetailAsync(id);
+        StateHasChanged();
+    }
+
+    private void ClearSelection()
+    {
+        Ui.SelectedBrowseId = null;
+        _detail = null;
+        StateHasChanged();
+    }
+
+    private static string TypeLabel(string t) => t switch
+    {
+        "item_exchange" => "EXCHANGE",
+        "auction" => "AUCTION",
+        "courier" => "COURIER",
+        _ => t.ToUpperInvariant(),
+    };
+
+    private static string TypeClass(string t) => t switch
+    {
+        "auction" => "amber",
+        "courier" => "violet",
+        _ => "dim",
+    };
+
+    private static string VerdictClass(string v) => v switch
+    {
+        "BUY" => "buy",
+        "THIN" => "thin",
+        "LOW VOL" => "lowvol",
+        _ => "skip",
+    };
+
+    public void Dispose()
+    {
+        PublicSync.Updated -= OnDataUpdated;
+        _debounce?.Dispose();
+    }
+}
