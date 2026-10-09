@@ -54,7 +54,11 @@ public class ContractQueryService
     private readonly StaticDataCache _static;
 
     private sealed record Snapshot(List<ScannerRow> Rows, int ScannedCount);
-    private sealed record BrowseEntry(BrowseRow Row, string SearchText);
+    /// <summary>Searchable fields are lowercase: title, system, station, destination, then one per item stack.</summary>
+    /// <summary>All = every field joined, a cheap prefilter before the per-field match.</summary>
+    private sealed record BrowseEntry(BrowseRow Row, string[] Fields, string All, BrowseItem[] Items);
+    private sealed record BrowseItem(string Lower, string Label);
+    private const int LocationFieldCount = 4;
     private readonly SnapshotCache<Snapshot> _scan;
     private readonly SnapshotCache<List<BrowseEntry>> _browse;
 
@@ -184,9 +188,10 @@ public class ContractQueryService
 
     /// <summary>
     /// Every live public contract in the region — like EVE's own contract search,
-    /// nothing is hidden by scope or verdict. Filtering is in-memory over a
-    /// precomputed lowercase search string (title, every item, locations); all
-    /// space-separated terms must match.
+    /// nothing is hidden by scope or verdict. Filtering is in-memory over
+    /// precomputed lowercase fields; see <see cref="BrowseSearch"/> for the syntax.
+    /// When searching, matched items lead the row's summary so a hit buried in a
+    /// 500-item contract is still visible.
     /// </summary>
     public async Task<(List<BrowseRow> rows, BrowseStats stats)> GetBrowseRowsAsync(BrowseFilter f, CancellationToken ct = default)
     {
@@ -194,7 +199,7 @@ public class ContractQueryService
         var snap = await _browse.GetAsync(regionId, ct);
 
         var now = DateTime.UtcNow;
-        var terms = f.Search.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var terms = BrowseSearch.Parse(f.Search);
         var typeKey = f.Type switch
         {
             "Item Exchange" => "item_exchange",
@@ -213,10 +218,11 @@ public class ContractQueryService
             live++;
             if (typeKey is not null && r.Type != typeKey) continue;
             if (f.HighsecOnly && r.Sec < 0.45) continue; // EVE rounds 0.45+ to 0.5
-            var match = true;
-            foreach (var t in terms)
-                if (!e.SearchText.Contains(t, StringComparison.Ordinal)) { match = false; break; }
-            if (!match) continue;
+            if (terms.Length > 0)
+            {
+                if (!AllWordsPresent(terms, e.All) || !BrowseSearch.Matches(terms, e.Fields)) continue;
+                r = WithMatchedSummary(r, e, terms);
+            }
             rows.Add(r);
             var v = BrowseValue(r);
             value += v;
@@ -238,6 +244,23 @@ public class ContractQueryService
         return (rows, new BrowseStats(live, rows.Count, value, cheapest == double.MaxValue ? 0 : cheapest));
     }
 
+    private static bool AllWordsPresent(string[][] terms, string all)
+    {
+        foreach (var t in terms)
+            if (!BrowseSearch.TermMatches(t, all)) return false;
+        return true;
+    }
+
+    private static BrowseRow WithMatchedSummary(BrowseRow r, BrowseEntry e, string[][] terms)
+    {
+        var matched = e.Items.Where(i => BrowseSearch.AnyTermMatches(terms, i.Lower)).ToList();
+        if (matched.Count == 0) return r; // matched on title/location only
+        const int max = 4;
+        var head = string.Join(", ", matched.Take(max).Select(i => i.Label));
+        var rest = e.Items.Length - Math.Min(matched.Count, max);
+        return r with { ItemsSummary = "✓ " + head + (rest > 0 ? $"  · +{rest} more" : "") };
+    }
+
     /// <summary>What the contract is "worth" for sorting/stats: courier reward, otherwise price.</summary>
     private static double BrowseValue(BrowseRow r) => r.Type == "courier" ? r.Reward : r.Price;
 
@@ -256,15 +279,26 @@ public class ContractQueryService
         var itemsByContract = items.ToLookup(i => i.ContractId);
 
         var result = new List<BrowseEntry>(list.Count);
-        var sb = new System.Text.StringBuilder();
         foreach (var c in list)
         {
             var cItems = itemsByContract[c.ContractId];
-            sb.Clear();
-            sb.Append(c.Title).Append('\n').Append(c.SystemName).Append('\n')
-              .Append(c.StationName).Append('\n').Append(c.DestinationName);
-            foreach (var i in cItems) sb.Append('\n').Append(TypeName(i.TypeId));
-            result.Add(new BrowseEntry(ToBrowseRow(c, cItems), sb.ToString().ToLowerInvariant()));
+            // One entry per type+direction: ESI returns a record per stack.
+            var stacks = cItems.GroupBy(i => (i.TypeId, i.IsIncluded))
+                .Select(g =>
+                {
+                    var name = TypeName(g.Key.TypeId);
+                    var qty = g.Sum(i => i.Quantity);
+                    return new BrowseItem(name.ToLowerInvariant(),
+                        (g.Key.IsIncluded ? "" : "⇐ ") + (qty > 1 ? qty + "× " : "") + name);
+                })
+                .ToArray();
+            var fields = new string[LocationFieldCount + stacks.Length];
+            fields[0] = c.Title.ToLowerInvariant();
+            fields[1] = c.SystemName.ToLowerInvariant();
+            fields[2] = c.StationName.ToLowerInvariant();
+            fields[3] = c.DestinationName.ToLowerInvariant();
+            for (var k = 0; k < stacks.Length; k++) fields[LocationFieldCount + k] = stacks[k].Lower;
+            result.Add(new BrowseEntry(ToBrowseRow(c, cItems), fields, string.Join('\n', fields), stacks));
         }
         return result;
     }

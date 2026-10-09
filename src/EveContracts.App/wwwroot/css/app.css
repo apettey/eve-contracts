@@ -203,6 +203,8 @@ input.search { width: 100%; }
 .items-row .q { font-size: 10.5px; color: var(--dim); }
 .items-row .v { font-family: var(--mono); font-size: 12px; text-align: right; }
 .vol-low { color: var(--red); }
+.items-row.hit { background: var(--selected); }
+.items-row.hit .n { color: var(--violet); font-weight: 600; }
 .ledger { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .ledger .line { display: flex; justify-content: space-between; }
 .ledger .line span:first-child { color: var(--text-2); }

@@ -12,7 +12,8 @@
         <div class="filters">
             <div class="fgroup search-group">
                 <label class="flabel">Search</label>
-                <input type="text" class="search" placeholder="item, title, system or station…"
+                <input type="text" class="search" placeholder="e.g. raven, ballistic control"
+                       title="Comma-separated terms must ALL match. Words in one term must match the same item (or the title / a location)."
                        value="@Ui.BrowseSearch" @oninput="OnSearch" />
             </div>
             <div class="fgroup">
@@ -136,7 +137,7 @@
 
     @if (_detail is not null)
     {
-        <DetailPanel Detail="_detail" MinVolume="@Ui.MinVolume" FeePct="@Settings.FeePct" ShowTerms="true" OnClose="ClearSelection" />
+        <DetailPanel Detail="_detail" MinVolume="@Ui.MinVolume" FeePct="@Settings.FeePct" ShowTerms="true" Search="@Ui.BrowseSearch" OnClose="ClearSelection" />
     }
 </div>
 

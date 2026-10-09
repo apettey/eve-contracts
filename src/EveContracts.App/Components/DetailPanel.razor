@@ -72,9 +72,9 @@
             <div class="items-grid items-head">
                 <span>Item</span><span class="r">Jita sell</span><span class="r">Jita buy</span><span class="r">Vol/d</span>
             </div>
-            @foreach (var it in Detail.Items)
+            @foreach (var it in OrderedItems)
             {
-                <div class="items-grid items-row">
+                <div class="items-grid items-row @(IsHit(it) ? "hit" : "")">
                     <div style="min-width:0;">
                         <div class="n">@(it.Included ? "" : "⇐ ")@it.Name</div>
                         <div class="q">×@it.Qty.ToString("N0", Inv) · @it.M3.ToString("N0", Inv) m³</div>
@@ -113,6 +113,13 @@
     [Parameter] public EventCallback OnClose { get; set; }
     /// <summary>All Contracts view: show the raw contract terms (price/buyout/courier) above the items.</summary>
     [Parameter] public bool ShowTerms { get; set; }
+    /// <summary>All Contracts search text; items it matches are listed first and highlighted.</summary>
+    [Parameter] public string? Search { get; set; }
+
+    private string[][] _terms = [];
+    protected override void OnParametersSet() => _terms = BrowseSearch.Parse(Search);
+    private bool IsHit(ItemDetail it) => _terms.Length > 0 && BrowseSearch.AnyTermMatches(_terms, it.Name.ToLowerInvariant());
+    private IEnumerable<ItemDetail> OrderedItems => _terms.Length == 0 ? Detail.Items : Detail.Items.OrderByDescending(IsHit);
 
     private static string TypeName(string t) => t switch
     {
