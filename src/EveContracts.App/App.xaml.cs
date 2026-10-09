@@ -108,6 +108,23 @@ public partial class App : Application
 
         await AppHost.StartAsync();
 
+        // Seed the UI from saved settings before first paint; otherwise the region picker
+        // shows The Forge while the scheduler scans the saved region.
+        var settings = AppHost.Services.GetRequiredService<SettingsService>();
+        var ui = AppHost.Services.GetRequiredService<UiState>();
+        try
+        {
+            await settings.LoadAsync();
+            ui.Region = settings.Region;
+            ui.MinVolume = settings.MinDailyVolume;
+            ui.PriceBasis = settings.PriceBasis;
+        }
+        catch (Exception ex)
+        {
+            // First run: the schema may not exist yet, and defaults are correct anyway.
+            AppHost.Services.GetService<ILogger<App>>()?.LogInformation("Settings not loaded at startup: {Error}", ex.Message);
+        }
+
         var sounds = AppHost.Services.GetRequiredService<AlertSoundService>();
         AppHost.Services.GetRequiredService<OwnContractSync>().NewInboundContracts += _ => sounds.PlayNewContract();
         AppHost.Services.GetRequiredService<PublicContractSync>().BigProfitFound += (_, _) => sounds.PlayProfitAlert();

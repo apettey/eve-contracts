@@ -128,6 +128,12 @@ public class ItemType
     public bool IsRig { get; set; }             // rigs are destroyed on removal — sunk cost when fitted
 }
 
+public class Region
+{
+    public int RegionId { get; set; }
+    public string Name { get; set; } = "";
+}
+
 public class SolarSystem
 {
     public int SolarSystemId { get; set; }

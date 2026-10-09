@@ -47,7 +47,20 @@ public class PublicContractSync
         _log = log;
     }
 
+    /// <summary>One region end to end: fetch, then the volume refresh + full evaluation pass.</summary>
     public async Task SyncRegionAsync(int regionId, CancellationToken ct = default)
+    {
+        await FetchRegionAsync(regionId, ct);
+        await FinalizeScanAsync(ct);
+    }
+
+    /// <summary>
+    /// List a region's contracts, upsert them, end the ones that vanished, and itemize
+    /// new ones progressively. Pricing/evaluation of new chunks happens here; the
+    /// slow volume refresh and full re-evaluation are left to <see cref="FinalizeScanAsync"/>
+    /// so a multi-region scan pays for them once.
+    /// </summary>
+    public async Task FetchRegionAsync(int regionId, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -78,6 +91,7 @@ public class PublicContractSync
         else
         {
             if (first.Data is not null) seen.AddRange(first.Data);
+            var complete = first.Data is not null;
 
             if (first.Pages > 1)
             {
@@ -90,11 +104,19 @@ public class PublicContractSync
                         if (resp.Data is not null) pageBag.Add(resp.Data);
                     });
                 foreach (var pageData in pageBag) seen.AddRange(pageData);
+                complete &= pageBag.Count == first.Pages - 1;
             }
             _log.LogInformation("Region {Region}: {Count} public contracts over {Pages} pages in {Ms} ms",
                 regionId, seen.Count, first.Pages, sw.ElapsedMilliseconds);
 
-            newIds = await UpsertContractsAsync(regionId, seen, ct);
+            // A region seen for the first time is a backfill: its existing BUYs are not
+            // news, so they must not trigger the profit alert (same rule as own contracts).
+            bool backfill;
+            using (var scope = _scopes.CreateScope())
+                backfill = !await scope.ServiceProvider.GetRequiredService<AppDb>().PublicContracts.AnyAsync(c => c.RegionId == regionId, ct);
+
+            newIds = await UpsertContractsAsync(regionId, seen, complete, ct);
+            if (backfill) lock (_profitAlerted) foreach (var id in newIds) _profitAlerted.Add(id);
             _log.LogInformation("Region {Region}: upsert done at {Ms} ms", regionId, sw.ElapsedMilliseconds);
 
             if (first.Etag is not null)
@@ -133,13 +155,18 @@ public class PublicContractSync
         }
         if (newIds.Count > 0)
             _log.LogInformation("Items: all {Total} new contracts itemized in {Ms} ms total", newIds.Count, sw.ElapsedMilliseconds);
+        _log.LogInformation("Region {Region}: fetch finished in {Ms} ms", regionId, sw.ElapsedMilliseconds);
+        Updated?.Invoke();
+    }
 
-        // Volumes last (per-type ESI history is the slow tail, so only scoped types), then a full pass.
+    /// <summary>Volumes last (per-type ESI history is the slow tail, so only scoped types), then a full pass.</summary>
+    public async Task FinalizeScanAsync(CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
         var needed = await _prices.GetVolumeNeededTypeIdsAsync(ct);
         await _prices.RefreshVolumesAsync(needed, ct: ct);
         await EvaluateAllAsync(ct);
         await _settings.SetLastPublicScanAsync(now, ct);
-        _log.LogInformation("Region {Region}: full sync finished in {Ms} ms", regionId, sw.ElapsedMilliseconds);
         Updated?.Invoke();
     }
 
@@ -147,8 +174,16 @@ public class PublicContractSync
     /// Upsert one scan's contracts via prepared raw-SQL statements (no change tracking).
     /// FirstSeen/ItemsFetched/evaluation columns are preserved for known ids.
     /// Returns the live contract ids that still need their items fetched.
+    /// <para>
+    /// With <paramref name="listingComplete"/> (every page of the region arrived), contracts
+    /// missing from the listing were accepted or deleted — verified against ESI, where such
+    /// ids answer 403/404 on their items endpoint. They are ended so they leave every live
+    /// view, and are never queued for item fetches (each would cost an ESI error). A
+    /// partial listing proves nothing, so it ends nothing.
+    /// </para>
     /// </summary>
-    public async Task<List<long>> UpsertContractsAsync(int regionId, IReadOnlyList<EsiPublicContract> seen, CancellationToken ct = default)
+    public async Task<List<long>> UpsertContractsAsync(int regionId, IReadOnlyList<EsiPublicContract> seen,
+        bool listingComplete = false, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
         if (!_static.Ready) await _static.LoadAsync(ct);
@@ -197,9 +232,18 @@ public class PublicContractSync
 
         await BulkOps.UpsertPublicContractsAsync(db, rows, ct);
 
-        return await db.PublicContracts
+        if (listingComplete)
+        {
+            var ended = await BulkOps.EndVanishedContractsAsync(db, regionId, now, ct);
+            if (ended > 0) _log.LogInformation("Region {Region}: {Count} contracts accepted/removed since last scan", regionId, ended);
+        }
+
+        var pending = await db.PublicContracts
             .Where(c => c.RegionId == regionId && !c.ItemsFetched && c.Type != "courier" && c.DateExpired > now)
             .Select(c => c.ContractId).ToListAsync(ct);
+        if (!listingComplete) return pending;
+        var listed = seen.Select(c => c.ContractId).ToHashSet();
+        return pending.Where(listed.Contains).ToList();
     }
 
     private async Task<List<int>> GetTypeIdsForContractsAsync(IReadOnlyList<long> contractIds, CancellationToken ct)
@@ -368,14 +412,17 @@ public class PublicContractSync
                 .Select(x => (x.ContractId, x.NetProfit)).ToList();
         }
 
-        if (!_alertBaselineDone)
+        List<(long Id, double Profit)> fresh;
+        lock (_profitAlerted)
         {
-            foreach (var (id, _) in qualifying) _profitAlerted.Add(id);
-            _alertBaselineDone = true;
-            return;
+            if (!_alertBaselineDone)
+            {
+                foreach (var (id, _) in qualifying) _profitAlerted.Add(id);
+                _alertBaselineDone = true;
+                return;
+            }
+            fresh = qualifying.Where(x => _profitAlerted.Add(x.Id)).ToList();
         }
-
-        var fresh = qualifying.Where(x => _profitAlerted.Add(x.Id)).ToList();
         if (fresh.Count > 0)
         {
             var best = fresh.Max(x => x.Profit);

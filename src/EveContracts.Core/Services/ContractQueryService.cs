@@ -23,7 +23,7 @@ public record ContractDetail(ScannerRow Row, IReadOnlyList<ItemDetail> Items, do
 public record BrowseFilter(string Region, string Search, string Type, bool HighsecOnly, string Sort);
 
 public record BrowseRow(
-    long ContractId, string Type, string Title, string ItemsSummary, string System, string Station,
+    long ContractId, string Type, string Title, string ItemsSummary, string Region, string System, string Station,
     string Destination, double Sec, int Jumps, double Price, double Reward, double Collateral, double Buyout,
     double VolumeM3, DateTime Issued, DateTime Expires, string Verdict, double Profit, bool ItemsFetched);
 
@@ -55,10 +55,9 @@ public class ContractQueryService
 
     private sealed record Snapshot(List<ScannerRow> Rows, int ScannedCount);
     /// <summary>Searchable fields are lowercase: title, system, station, destination, then one per item stack.</summary>
-    /// <summary>All = every field joined, a cheap prefilter before the per-field match.</summary>
-    private sealed record BrowseEntry(BrowseRow Row, string[] Fields, string All, BrowseItem[] Items);
-    private sealed record BrowseItem(string Lower, string Label);
-    private const int LocationFieldCount = 4;
+    /// <summary>Fields: lowercase title, system, station, destination, region. Items are matched by type id.</summary>
+    private sealed record BrowseEntry(BrowseRow Row, string[] Fields, BrowseItem[] Items);
+    private sealed record BrowseItem(int TypeId, long Qty, bool Included);
     private readonly SnapshotCache<Snapshot> _scan;
     private readonly SnapshotCache<List<BrowseEntry>> _browse;
 
@@ -122,8 +121,7 @@ public class ContractQueryService
 
     public async Task<(List<ScannerRow> rows, ScannerStats stats)> GetScannerRowsAsync(ScannerFilter f, CancellationToken ct = default)
     {
-        var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
-        var snap = await _scan.GetAsync(regionId, ct);
+        var snap = await _scan.GetAsync(_static.ResolveRegion(f.Region), ct);
 
         var now = DateTime.UtcNow;
         var minMargin = f.MinMarginPct / 100.0;
@@ -157,10 +155,11 @@ public class ContractQueryService
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         var now = DateTime.UtcNow;
 
-        var scanned = await db.PublicContracts.CountAsync(c => c.RegionId == regionId && c.DateExpired > now, ct);
+        // regionId 0 = all regions.
+        var scanned = await db.PublicContracts.CountAsync(c => (regionId == 0 || c.RegionId == regionId) && c.DateExpired > now, ct);
 
         var live = db.PublicContracts.AsNoTracking()
-            .Where(c => c.RegionId == regionId && c.DateExpired > now && c.ItemsFetched)
+            .Where(c => (regionId == 0 || c.RegionId == regionId) && c.DateExpired > now && c.ItemsFetched)
             .Where(c => c.Verdict != "EXCLUDED" && c.Verdict != "PENDING");
 
         // SCAM rows sink below everything else; the rest keep profit-desc order.
@@ -195,11 +194,11 @@ public class ContractQueryService
     /// </summary>
     public async Task<(List<BrowseRow> rows, BrowseStats stats)> GetBrowseRowsAsync(BrowseFilter f, CancellationToken ct = default)
     {
-        var regionId = Sde.SdeService.Regions.GetValueOrDefault(f.Region, Esi.EsiClient.TheForgeRegionId);
-        var snap = await _browse.GetAsync(regionId, ct);
+        var snap = await _browse.GetAsync(_static.ResolveRegion(f.Region), ct);
 
         var now = DateTime.UtcNow;
         var terms = BrowseSearch.Parse(f.Search);
+        var termTypes = MatchingTypesPerTerm(terms);
         var typeKey = f.Type switch
         {
             "Item Exchange" => "item_exchange",
@@ -220,8 +219,8 @@ public class ContractQueryService
             if (f.HighsecOnly && r.Sec < 0.45) continue; // EVE rounds 0.45+ to 0.5
             if (terms.Length > 0)
             {
-                if (!AllWordsPresent(terms, e.All) || !BrowseSearch.Matches(terms, e.Fields)) continue;
-                r = WithMatchedSummary(r, e, terms);
+                if (!Matches(e, terms, termTypes)) continue;
+                r = WithMatchedSummary(r, e, termTypes);
             }
             rows.Add(r);
             var v = BrowseValue(r);
@@ -244,19 +243,56 @@ public class ContractQueryService
         return (rows, new BrowseStats(live, rows.Count, value, cheapest == double.MaxValue ? 0 : cheapest));
     }
 
-    private static bool AllWordsPresent(string[][] terms, string all)
+    /// <summary>
+    /// Item names are matched once per search against the ~27k distinct types, not once
+    /// per contract stack: each term becomes the set of type ids it matches, and a
+    /// contract then only needs set lookups. Keeps all-regions search to a few ms.
+    /// </summary>
+    private HashSet<int>[] MatchingTypesPerTerm(string[][] terms)
     {
-        foreach (var t in terms)
-            if (!BrowseSearch.TermMatches(t, all)) return false;
+        var names = LowerTypeNames();
+        var sets = new HashSet<int>[terms.Length];
+        for (var t = 0; t < terms.Length; t++)
+        {
+            sets[t] = [];
+            foreach (var (id, lower) in names)
+                if (BrowseSearch.TermMatches(terms[t], lower)) sets[t].Add(id);
+        }
+        return sets;
+    }
+
+    private (IReadOnlyDictionary<int, TypeInfo> Source, KeyValuePair<int, string>[] Names)? _lowerNames;
+
+    private KeyValuePair<int, string>[] LowerTypeNames()
+    {
+        var types = _static.Types;
+        var cached = _lowerNames;
+        if (cached is { } c && ReferenceEquals(c.Source, types)) return c.Names;
+        var names = types.Select(kv => KeyValuePair.Create(kv.Key, kv.Value.Name.ToLowerInvariant())).ToArray();
+        _lowerNames = (types, names);
+        return names;
+    }
+
+    /// <summary>Every term must hit one field: an item (via its type set), the title, or a location.</summary>
+    private static bool Matches(BrowseEntry e, string[][] terms, HashSet<int>[] termTypes)
+    {
+        for (var t = 0; t < terms.Length; t++)
+        {
+            var hit = false;
+            foreach (var i in e.Items)
+                if (termTypes[t].Contains(i.TypeId)) { hit = true; break; }
+            if (!hit && !BrowseSearch.Matches([terms[t]], e.Fields)) return false;
+        }
         return true;
     }
 
-    private static BrowseRow WithMatchedSummary(BrowseRow r, BrowseEntry e, string[][] terms)
+    private BrowseRow WithMatchedSummary(BrowseRow r, BrowseEntry e, HashSet<int>[] termTypes)
     {
-        var matched = e.Items.Where(i => BrowseSearch.AnyTermMatches(terms, i.Lower)).ToList();
+        var matched = e.Items.Where(i => termTypes.Any(s => s.Contains(i.TypeId))).ToList();
         if (matched.Count == 0) return r; // matched on title/location only
         const int max = 4;
-        var head = string.Join(", ", matched.Take(max).Select(i => i.Label));
+        var head = string.Join(", ", matched.Take(max).Select(i =>
+            (i.Included ? "" : "⇐ ") + (i.Qty > 1 ? i.Qty + "× " : "") + TypeName(i.TypeId)));
         var rest = e.Items.Length - Math.Min(matched.Count, max);
         return r with { ItemsSummary = "✓ " + head + (rest > 0 ? $"  · +{rest} more" : "") };
     }
@@ -271,7 +307,7 @@ public class ContractQueryService
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         var now = DateTime.UtcNow;
 
-        var live = db.PublicContracts.AsNoTracking().Where(c => c.RegionId == regionId && c.DateExpired > now);
+        var live = db.PublicContracts.AsNoTracking().Where(c => (regionId == 0 || c.RegionId == regionId) && c.DateExpired > now);
         var list = await live.ToListAsync(ct);
         var items = await live
             .Join(db.ContractItems.AsNoTracking(), C => C.ContractId, I => I.ContractId, (C, I) => I)
@@ -284,21 +320,14 @@ public class ContractQueryService
             var cItems = itemsByContract[c.ContractId];
             // One entry per type+direction: ESI returns a record per stack.
             var stacks = cItems.GroupBy(i => (i.TypeId, i.IsIncluded))
-                .Select(g =>
-                {
-                    var name = TypeName(g.Key.TypeId);
-                    var qty = g.Sum(i => i.Quantity);
-                    return new BrowseItem(name.ToLowerInvariant(),
-                        (g.Key.IsIncluded ? "" : "⇐ ") + (qty > 1 ? qty + "× " : "") + name);
-                })
+                .Select(g => new BrowseItem(g.Key.TypeId, g.Sum(i => i.Quantity), g.Key.IsIncluded))
                 .ToArray();
-            var fields = new string[LocationFieldCount + stacks.Length];
-            fields[0] = c.Title.ToLowerInvariant();
-            fields[1] = c.SystemName.ToLowerInvariant();
-            fields[2] = c.StationName.ToLowerInvariant();
-            fields[3] = c.DestinationName.ToLowerInvariant();
-            for (var k = 0; k < stacks.Length; k++) fields[LocationFieldCount + k] = stacks[k].Lower;
-            result.Add(new BrowseEntry(ToBrowseRow(c, cItems), fields, string.Join('\n', fields), stacks));
+            string[] fields =
+            [
+                c.Title.ToLowerInvariant(), c.SystemName.ToLowerInvariant(), c.StationName.ToLowerInvariant(),
+                c.DestinationName.ToLowerInvariant(), _static.RegionName(c.RegionId).ToLowerInvariant(),
+            ];
+            result.Add(new BrowseEntry(ToBrowseRow(c, cItems), fields, stacks));
         }
         return result;
     }
@@ -315,7 +344,7 @@ public class ContractQueryService
             : $"Contract {c.ContractId}";
         // Only scanner-scope verdicts mean anything; EXCLUDED/PENDING rows carry no profit claim.
         var evaluated = c.Verdict is not ("EXCLUDED" or "PENDING");
-        return new BrowseRow(c.ContractId, c.Type, title, summary,
+        return new BrowseRow(c.ContractId, c.Type, title, summary, _static.RegionName(c.RegionId),
             c.SystemName, ShortStation(c.StationName), ShortStation(c.DestinationName),
             c.SecurityStatus, c.JumpsToJita, c.Price, c.Reward, c.Collateral, c.Buyout, c.VolumeM3,
             c.DateIssued, c.DateExpired, evaluated ? c.Verdict : "", evaluated ? c.NetProfit : 0, c.ItemsFetched);
