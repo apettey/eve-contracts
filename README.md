@@ -3,7 +3,7 @@
 A Windows desktop app (.NET 10, WPF + Blazor Hybrid) for EVE Online contract work, with three views over one local cache:
 
 1. **Profit Scanner** — sweeps every public contract in a region, prices the contents against Jita 4-4, and surfaces the ones you can buy and resell at a real profit — with scam contracts identified and sunk to the bottom.
-2. **All Contracts** — every public contract in the region, searchable like the in-game contract browser.
+2. **All Contracts** — every public contract in a region, or all of New Eden at once, searchable like the in-game contract browser.
 3. **Our Contracts** — one board for inbound/outbound contracts across 12+ authenticated characters, with terms, item manifests, and expiry tracking.
 
 The UI is a pixel-faithful port of the design in [`design_handoff_contract_tracker/`](design_handoff_contract_tracker/README.md); the performance work that makes it feel instant is documented in [OPTIMIZATIONS.md](OPTIMIZATIONS.md).
@@ -18,7 +18,7 @@ Every 30 minutes (matching ESI's own cache window — polling faster returns the
 
 Everything lands in a local SQLite cache, so the filter bar never touches the network:
 
-- **Region** — The Forge, Domain, Sinq Laison, Heimatar, Metropolis. Switching triggers a background scan of the new region while cached rows show immediately.
+- **Region** — any of the 70 known-space regions (trade hubs listed first), or **All regions** to scan and evaluate New Eden as a whole. Switching triggers a background scan of the new region while cached rows show immediately.
 - **Min profit %** — the margin below which a profitable contract is labeled `THIN` rather than `BUY`. Margin is measured against your capital outlay (`net profit / ask price`), because 10M profit on a 20M contract and on a 2B contract are very different trades.
 - **Min Jita volume/day** — the liquidity floor. A contract only rates `BUY` if *every* item in it trades more than this per day in Jita; otherwise it's `LOW VOL`. Reasoning: profit you can't liquidate isn't profit — it's inventory. Per-item overrides exist in the database (`ItemSettings`) for things you know you can move.
 - **Max contract price** — capital cap; anything above is excluded outright.
@@ -78,14 +78,22 @@ The screenshot above shows the same Forge scan on buy basis: passed filters drop
 
 ## All Contracts
 
-The scanner deliberately hides most of the market (anything outside ships/modules, couriers, want-to-buy). **All Contracts** shows *everything* the region scan has cached — item exchanges, auctions and couriers — the same set you'd see in EVE's own contract search, but answered from the local cache in milliseconds:
+![All Contracts across every region](docs/img/all-contracts.png)
 
-- **Search for several items at once** — commas separate terms, and every term must match: `raven, ballistic control` finds contracts holding a Raven *and* a Ballistic Control item. Words within a term must land in the same item (or the title, or a location), so `ballistic shield` won't falsely match a contract that merely has a Ballistic Control and a Shield Extender. Requested (⇐) items count too: `large skill injector, plex` finds LSI-for-PLEX swaps. Matched items lead each row's summary (`✓ 3× Hobgoblin I, …`) and are listed first and highlighted in the detail panel, so a hit inside a 500-item contract is still visible. ~6 ms over ~58k Forge contracts.
+The scanner deliberately hides most of the market (anything outside ships/modules, couriers, want-to-buy). **All Contracts** shows *everything* the scan has cached — item exchanges, auctions and couriers — the same set you'd see in EVE's own contract search, but answered from the local cache in milliseconds:
+
+- **Any region, or all of them** — pick one of the 70 known-space regions, or **All regions** to search New Eden in one go (~50k live contracts; rows then show `System · Region`, and region names are searchable). The first all-regions sweep itemizes every region's contracts once — about two minutes, since outside the hubs most regions hold only 30–300 contracts — and later sweeps cost little more than an ETag check per region.
+
+- **Search for several items at once** — commas separate terms, and every term must match: `raven, ballistic control` finds contracts holding a Raven *and* a Ballistic Control item. Words within a term must land in the same item (or the title, or a location), so `ballistic shield` won't falsely match a contract that merely has a Ballistic Control and a Shield Extender. Requested (⇐) items count too: `large skill injector, plex` finds LSI-for-PLEX swaps. Matched items lead each row's summary (`✓ 3× Hobgoblin I, …`) and are listed first and highlighted in the detail panel, so a hit inside a 500-item contract is still visible. A few ms per keystroke, even across all regions.
 - **Type** (All / Item Exchange / Auction / Courier), **Highsec only**, and **Sort** (newest, price ↑/↓, expiring soonest, net profit). Price ↑ puts 0-ISK want-to-buy rows last so the cheapest real offer is on top.
 - **Stats** — live contracts, matches, cheapest match, and total matching value.
+![Multi-item search with matched items highlighted](docs/img/all-contracts-search.png)
+
 - **Detail** — the raw terms (price, auction buyout, courier reward/collateral/destination, volume, issued/expiry), the item list vs Jita, and the profit ledger. Contracts outside the scanner's scope carry no verdict, so a "profit" shown for them is only a Jita reference.
 
-The browser shares the scanner's region selection and its data, so it adds no ESI traffic.
+The browser shares the scanner's region selection and its data, so it adds no ESI traffic of its own.
+
+**Gone means gone.** When a region's listing arrives complete (every page), contracts missing from it were accepted or deleted in game — checked against ESI, where those ids answer 403/404 on their items endpoint — so they leave every view immediately instead of lingering until their expiry date. A partial listing (a page failed) ends nothing.
 
 ---
 
@@ -129,7 +137,7 @@ Two synthesized audio cues (no sound files, generated in-memory), each toggleabl
 
 | What | Source | Cadence | Why |
 |---|---|---|---|
-| Public contracts | ESI `/contracts/public/{region}/` (ETag-aware) | 30 min | matches ESI's cache; a 304 costs nothing |
+| Public contracts | ESI `/contracts/public/{region}/` (ETag-aware), one region or all 70 | 30 min | matches ESI's cache; a 304 costs nothing |
 | Contract items | ESI `/contracts/public/items/{id}/` | once per contract, ever | items are immutable; refetching wastes error budget |
 | Jita buy/sell | Fuzzwork aggregates (batched ~900 types/request) | hourly | one HTTP call replaces hundreds of ESI order pages |
 | Prev-day volume | ESI market history, only in-scope items of live contracts | ~daily | history changes once per day; scoping cut calls ~10× |

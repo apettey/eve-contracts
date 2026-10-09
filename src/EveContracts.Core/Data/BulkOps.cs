@@ -307,5 +307,23 @@ public static class BulkOps
 
     // SQLite stores DateTime as ISO-8601 text when written by EF; match that format
     // so EF reads back what we write.
+    /// <summary>
+    /// After a complete region listing, contracts not seen since <paramref name="scanStart"/>
+    /// were accepted or deleted: end them now so they leave every live view, and the
+    /// normal 3-day retention purges them. Returns how many were ended.
+    /// </summary>
+    public static async Task<int> EndVanishedContractsAsync(AppDb db, int regionId, DateTime scanStart, CancellationToken ct)
+    {
+        var conn = await OpenAsync(db, ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE PublicContracts SET DateExpired = @start
+            WHERE RegionId = @region AND LastSeen < @start AND DateExpired > @start
+            """;
+        cmd.Parameters.AddWithValue("@start", Dt(scanStart));
+        cmd.Parameters.AddWithValue("@region", regionId);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private static string Dt(DateTime dt) => dt.ToString("yyyy-MM-dd HH:mm:ss.fffffff", System.Globalization.CultureInfo.InvariantCulture);
 }
