@@ -125,6 +125,9 @@ input[type="checkbox"] { accent-color: var(--violet); }
 /* ===== Scanner table ===== */
 .tbl-wrap { flex: 1; overflow: auto; }
 .scan-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 1fr 90px 90px 90px 90px 70px 80px; gap: 14px; }
+.browse-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 84px 1fr 90px 100px 90px 70px 80px; gap: 14px; }
+.search-group { flex: 1; min-width: 220px; max-width: 420px; }
+input.search { width: 100%; }
 .tbl-head {
     padding: 10px 28px; font-size: 10px; letter-spacing: 0.1em; color: var(--dim);
     text-transform: uppercase; border-bottom: 1px solid var(--border-strong);

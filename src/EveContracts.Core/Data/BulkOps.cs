@@ -30,10 +30,12 @@ public static class BulkOps
             INSERT INTO PublicContracts
                 (ContractId, RegionId, Type, Title, Price, StartLocationId, SolarSystemId, SystemName,
                  StationName, SecurityStatus, JumpsToJita, DateIssued, DateExpired, VolumeM3,
+                 Reward, Collateral, Buyout, DestinationName,
                  FirstSeen, LastSeen, ItemsFetched,
                  JitaSellValue, Fees, Hauling, NetProfit, Margin, Verdict, FlagsJson)
             VALUES (@id, @region, @type, @title, @price, @startLoc, @sysId, @sysName,
                     @station, @sec, @jumps, @issued, @expired, @vol,
+                    @reward, @collateral, @buyout, @dest,
                     @firstSeen, @lastSeen, 0,
                     0, 0, 0, 0, 0, 'PENDING', '[]')
             ON CONFLICT(ContractId) DO UPDATE SET
@@ -42,7 +44,8 @@ public static class BulkOps
                 SystemName = excluded.SystemName, StationName = excluded.StationName,
                 SecurityStatus = excluded.SecurityStatus, JumpsToJita = excluded.JumpsToJita,
                 DateIssued = excluded.DateIssued, DateExpired = excluded.DateExpired,
-                VolumeM3 = excluded.VolumeM3, LastSeen = excluded.LastSeen
+                VolumeM3 = excluded.VolumeM3, Reward = excluded.Reward, Collateral = excluded.Collateral,
+                Buyout = excluded.Buyout, DestinationName = excluded.DestinationName, LastSeen = excluded.LastSeen
             """;
         var pId = cmd.Parameters.Add("@id", SqliteType.Integer);
         var pRegion = cmd.Parameters.Add("@region", SqliteType.Integer);
@@ -58,6 +61,10 @@ public static class BulkOps
         var pIssued = cmd.Parameters.Add("@issued", SqliteType.Text);
         var pExpired = cmd.Parameters.Add("@expired", SqliteType.Text);
         var pVol = cmd.Parameters.Add("@vol", SqliteType.Real);
+        var pReward = cmd.Parameters.Add("@reward", SqliteType.Real);
+        var pCollateral = cmd.Parameters.Add("@collateral", SqliteType.Real);
+        var pBuyout = cmd.Parameters.Add("@buyout", SqliteType.Real);
+        var pDest = cmd.Parameters.Add("@dest", SqliteType.Text);
         var pFirstSeen = cmd.Parameters.Add("@firstSeen", SqliteType.Text);
         var pLastSeen = cmd.Parameters.Add("@lastSeen", SqliteType.Text);
         cmd.Prepare();
@@ -78,6 +85,10 @@ public static class BulkOps
             pIssued.Value = Dt(r.DateIssued);
             pExpired.Value = Dt(r.DateExpired);
             pVol.Value = r.VolumeM3;
+            pReward.Value = r.Reward;
+            pCollateral.Value = r.Collateral;
+            pBuyout.Value = r.Buyout;
+            pDest.Value = r.DestinationName;
             pFirstSeen.Value = Dt(r.FirstSeen);
             pLastSeen.Value = Dt(r.LastSeen);
             await cmd.ExecuteNonQueryAsync(ct);

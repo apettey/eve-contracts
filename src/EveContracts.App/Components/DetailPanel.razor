@@ -10,7 +10,7 @@
             <button class="close-btn" @onclick="OnClose">✕</button>
         </div>
         <div class="flag-row">
-            @if (Detail.Row.Verdict == "BUY")
+            @if (Detail.Row.Verdict == "BUY" && Detail.Terms.Type != "courier")
             {
                 <span class="badge green">✓ PASSES ALL FILTERS</span>
             }
@@ -31,8 +31,43 @@
         </div>
     </div>
 
+    @if (ShowTerms)
+    {
+        var t = Detail.Terms;
+        <div class="detail-sec">
+            <div class="sec-lbl">Contract terms</div>
+            <div class="ledger">
+                <div class="line"><span>Type</span><span class="v">@TypeName(t.Type)</span></div>
+                @if (t.Type == "courier")
+                {
+                    <div class="line"><span>Reward</span><span class="v">@IskFormat.Short(t.Reward)</span></div>
+                    <div class="line"><span>Collateral</span><span class="v">@IskFormat.Short(t.Collateral)</span></div>
+                    <div class="line"><span>Destination</span><span class="v">@(t.Destination == "" ? "—" : t.Destination)</span></div>
+                }
+                else
+                {
+                    <div class="line"><span>@(t.Type == "auction" ? "Starting bid" : "Price")</span><span class="v">@IskFormat.Short(t.Price)</span></div>
+                    @if (t.Buyout > 0)
+                    {
+                        <div class="line"><span>Buyout</span><span class="v">@IskFormat.Short(t.Buyout)</span></div>
+                    }
+                }
+                <div class="line"><span>Volume</span><span class="v">@t.VolumeM3.ToString("N0", Inv) m³</span></div>
+                <div class="line"><span>Issued</span><span class="v">@t.Issued.ToLocalTime().ToString("yyyy-MM-dd HH:mm", Inv)</span></div>
+                <div class="line"><span>Expires</span><span class="v">@IskFormat.Expiry(t.Expires, DateTime.UtcNow)</span></div>
+            </div>
+        </div>
+    }
+
+    @* Courier contracts have no public item list and no resale economics. *@
+    @if (Detail.Terms.Type != "courier")
+    {
     <div class="detail-sec">
         <div class="sec-lbl">Items vs Jita</div>
+        @if (Detail.Items.Count == 0)
+        {
+            <div class="dimtxt mono" style="font-size:12px;">@(Detail.Terms.ItemsFetched ? "no items" : "items not fetched yet — next scan")</div>
+        }
         <div class="items-tbl">
             <div class="items-grid items-head">
                 <span>Item</span><span class="r">Jita sell</span><span class="r">Jita buy</span><span class="r">Vol/d</span>
@@ -53,7 +88,7 @@
     </div>
 
     <div class="detail-sec">
-        <div class="sec-lbl">Profit breakdown</div>
+        <div class="sec-lbl">Profit breakdown@(ShowTerms && Detail.Terms.Verdict == "" ? " · outside scanner scope" : "")</div>
         <div class="ledger">
             <div class="line"><span>Jita sell value</span><span class="v">@IskFormat.Short(Detail.Row.SellVal)</span></div>
             <div class="line"><span>Contract price</span><span class="v">−@IskFormat.Short(Detail.Row.Price)</span></div>
@@ -67,6 +102,7 @@
             <div class="sub"><span>Est. time to liquidate</span><span class="v mono">@Detail.Liquidate</span></div>
         </div>
     </div>
+    }
 </aside>
 
 @code {
@@ -75,4 +111,14 @@
     [Parameter] public double MinVolume { get; set; }
     [Parameter] public double FeePct { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
+    /// <summary>All Contracts view: show the raw contract terms (price/buyout/courier) above the items.</summary>
+    [Parameter] public bool ShowTerms { get; set; }
+
+    private static string TypeName(string t) => t switch
+    {
+        "item_exchange" => "Item Exchange",
+        "auction" => "Auction",
+        "courier" => "Courier",
+        _ => t,
+    };
 }

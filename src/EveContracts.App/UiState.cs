@@ -1,6 +1,6 @@
 namespace EveContracts.App;
 
-/// <summary>Shared UI state for the two views. Singleton; components subscribe to Changed.</summary>
+/// <summary>Shared UI state for the views. Singleton; components subscribe to Changed.</summary>
 public class UiState
 {
     public event Action? Changed;
@@ -17,6 +17,13 @@ public class UiState
     public bool HighsecOnly { get; set; } = true;
     public string PriceBasis { get; set; } = "sell";
     public long? SelectedContractId { get; set; }
+
+    // All Contracts browser (shares Region with the scanner)
+    public string BrowseSearch { get; set; } = "";
+    public string BrowseType { get; set; } = "All";
+    public string BrowseSort { get; set; } = "Newest";
+    public bool BrowseHighsecOnly { get; set; }
+    public long? SelectedBrowseId { get; set; }
 
     // Own contracts filters
     public int? CharacterFilter { get; set; }

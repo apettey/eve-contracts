@@ -167,12 +167,35 @@ for (var iter = 0; iter < 20; iter++)
 }
 Console.WriteLine($"detail warm avg: {detailMs.Skip(2).Average():0.0} ms");
 
+// ---------- 5. All Contracts browser (snapshot build + search per keystroke) ----------
+query.Invalidate();
+var swb = Stopwatch.StartNew();
+var (allRows, allStats) = await query.GetBrowseRowsAsync(new BrowseFilter("The Forge", "", "All", false, "Newest"));
+swb.Stop();
+var browseBuildMs = swb.Elapsed.TotalMilliseconds;
+Console.WriteLine($"browse build: {browseBuildMs:0} ms ({allRows.Count:N0} of {allStats.Live:N0} live)");
+string[] searches = ["type 1", "type 12", "type 123", "system 7 type", "moon 3", "contract 99", "zzz-no-match", ""];
+string[] sorts = ["Newest", "Price ↑", "Price ↓", "Expiring soonest", "Net profit"];
+var browseMs = new List<double>();
+for (var iter = 0; iter < 100; iter++)
+{
+    var bf = new BrowseFilter("The Forge", searches[iter % searches.Length], "All", iter % 2 == 0, sorts[iter % sorts.Length]);
+    var sw = Stopwatch.StartNew();
+    var (rows, _) = await query.GetBrowseRowsAsync(bf);
+    sw.Stop();
+    browseMs.Add(sw.Elapsed.TotalMilliseconds);
+    if (iter < searches.Length) Console.WriteLine($"browse '{bf.Search}' ({bf.Sort}): {rows.Count:N0} rows");
+}
+var warmB = browseMs.OrderBy(x => x).ToList();
+Console.WriteLine($"browse search median: {warmB[warmB.Count / 2]:0.00} ms (p95 {warmB[(int)(warmB.Count * 0.95)]:0.00})");
+
 Console.WriteLine();
 Console.WriteLine("=== SUMMARY (median) ===");
 Console.WriteLine($"upsert:   {Median(upsertMs):0} ms");
 Console.WriteLine($"evaluate: {Median(evalMs):0} ms");
 Console.WriteLine($"query:    {warmQ[warmQ.Count / 2]:0.00} ms");
 Console.WriteLine($"detail:   {detailMs.Skip(2).Average():0.0} ms");
+Console.WriteLine($"browse:   {warmB[warmB.Count / 2]:0.00} ms (build {browseBuildMs:0} ms)");
 
 sp.Dispose();
 Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

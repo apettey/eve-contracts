@@ -171,7 +171,12 @@ public class PublicContractSync
                 DateIssued = c.DateIssued,
                 DateExpired = c.DateExpired,
                 VolumeM3 = c.Volume ?? 0,
+                Reward = c.Reward ?? 0,
+                Collateral = c.Collateral ?? 0,
+                Buyout = c.Buyout ?? 0,
             };
+            if (c.EndLocationId is long end && end != 0)
+                row.DestinationName = _static.Stations.TryGetValue(end, out var dest) ? dest.Name : "Player structure";
             if (row.StartLocationId != 0 && _static.Stations.TryGetValue(row.StartLocationId, out var station))
             {
                 row.StationName = station.Name;

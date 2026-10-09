@@ -140,6 +140,7 @@ public class EsiPublicContract
     public double? Price { get; set; }
     public double? Reward { get; set; }
     public double? Collateral { get; set; }
+    public double? Buyout { get; set; }
     public long? StartLocationId { get; set; }
     public long? EndLocationId { get; set; }
     public DateTime DateIssued { get; set; }

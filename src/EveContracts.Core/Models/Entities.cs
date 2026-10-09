@@ -17,6 +17,10 @@ public class PublicContract
     public DateTime DateIssued { get; set; }
     public DateTime DateExpired { get; set; }
     public double VolumeM3 { get; set; }
+    public double Reward { get; set; }      // courier only
+    public double Collateral { get; set; }  // courier only
+    public double Buyout { get; set; }      // auction only
+    public string DestinationName { get; set; } = ""; // courier only
     public DateTime FirstSeen { get; set; }
     public DateTime LastSeen { get; set; }
     public bool ItemsFetched { get; set; }
