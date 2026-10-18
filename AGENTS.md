@@ -1,0 +1,23 @@
+# AGENTS.md — working on eve-contracts
+
+Guidance for AI agents (and humans) contributing to this repository.
+
+## Project facts
+
+- Windows desktop app: .NET 10, WPF + Blazor Hybrid (WebView2). Building, testing and running need Windows.
+- `src/EveContracts.Core` holds domain logic, the SQLite cache, the ESI client, the SDE loader and evaluation. `src/EveContracts.App` holds the UI.
+  Tests are in `tests/EveContracts.Tests` and the perf harness in `tests/EveContracts.Bench`. See `README.md` and `OPTIMIZATIONS.md`.
+- `EVECONTRACTS_DATA_DIR` points a dev build at a copy of the data, so the installed app's data is left alone.
+
+## Shipping changes
+
+Every change follows the **`ship-change`** skill (`.claude/skills/ship-change/SKILL.md`). These six rules are blocking:
+
+1. Tests are in place, and the full suite passes locally (code changes; needs Windows) and in CI.
+2. A fresh reviewer reviews the diff, and the loop repeats until a round has zero findings. The round count goes in the PR body.
+3. Every visible change has before/after screenshots in its release-log entry and in the PR.
+4. Every change gets a `changelog/` entry. Visible changes also get a `whats-new/features.json` entry.
+5. Every merged PR gets a new SemVer version. There is no skip.
+6. Release quickly: small PRs, merged the same day, released right after merge.
+
+If this file and the skill disagree, this file wins. Update both in the same PR.
