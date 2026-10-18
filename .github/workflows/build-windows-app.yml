@@ -12,6 +12,10 @@
 # Produces a ready-to-run, self-contained win-x64 zip:
 #  - every run: uploaded as a workflow artifact
 #  - runs for a v* tag: attached to a GitHub Release for that tag
+#  - runs with a `version` input (e.g. from a push to the main branch): built and
+#    packed as that version, and only after the build succeeds is the v<version> tag
+#    created on the built commit and the GitHub Release published. Callers that
+#    don't pass `version` keep the tag-driven behaviour above.
 name: Build Windows App
 
 on:
@@ -63,6 +67,22 @@ on:
         required: false
         type: string
         default: ""
+      version:
+        description: >-
+          Release version (x.y.z, no leading v). When set, the run is a release:
+          it builds this version from the current commit and, only after the build,
+          tests and pack succeed, creates and pushes tag v<version> and publishes the
+          GitHub Release. Empty (default) = version comes from a v* tag ref, if any.
+        required: false
+        type: string
+        default: ""
+      release-notes:
+        description: >-
+          Markdown body for the GitHub Release (only with `version`).
+          Empty = GitHub's generated notes.
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -79,8 +99,20 @@ jobs:
       - name: Compute version
         id: version
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(?<v>\d+\.\d+\.\d+.*)$') {
+          $tag = '${{ github.ref_name }}'
+          if ($env:INPUT_VERSION) {
+            if ($env:INPUT_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "version input must be x.y.z (got '$env:INPUT_VERSION')." }
+            $version = $env:INPUT_VERSION
+            $tag = "v$version"
+            $release = 'true'
+            # Fail before building if the tag is already taken: a release is never overwritten.
+            git ls-remote --exit-code --tags origin "refs/tags/$tag" | Out-Null
+            if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists on origin." }
+            $global:LASTEXITCODE = 0
+          } elseif ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(?<v>\d+\.\d+\.\d+.*)$') {
             $version = $Matches.v
             $release = 'true'
           } else {
@@ -90,7 +122,8 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "release=$release" >> $env:GITHUB_OUTPUT
-          Write-Host "Version: $version (release: $release)"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version (release: $release, tag: $tag)"
 
       - name: Test
         if: inputs.test-project != ''
@@ -159,6 +192,17 @@ jobs:
           path: Releases/
           retention-days: 7
 
+      # Version-input releases: the tag is created only now, after test, publish and
+      # pack succeeded, on the commit that was built. (Tag pushes made with the job's
+      # GITHUB_TOKEN don't trigger other workflow runs, so this doesn't rebuild.)
+      - name: Create tag (version releases)
+        if: inputs.version != ''
+        shell: pwsh
+        run: |
+          git tag '${{ steps.version.outputs.tag }}' '${{ github.sha }}'
+          git push origin 'refs/tags/${{ steps.version.outputs.tag }}'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Publish Velopack packages to release (tag builds)
         if: inputs.main-exe != '' && steps.version.outputs.release == 'true'
         shell: pwsh
@@ -168,8 +212,8 @@ jobs:
           vpk upload github --repoUrl 'https://github.com/${{ github.repository }}' `
             --token $env:GH_TOKEN `
             --publish `
-            --releaseName '${{ inputs.app-name }} ${{ github.ref_name }}' `
-            --tag '${{ github.ref_name }}'
+            --releaseName '${{ inputs.app-name }} ${{ steps.version.outputs.tag }}' `
+            --tag '${{ steps.version.outputs.tag }}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Release (tag builds)
@@ -177,13 +221,27 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          # Passed via env, never interpolated into the script: notes are free text.
+          RELEASE_NOTES: ${{ inputs.release-notes }}
         run: |
-          gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload '${{ github.ref_name }}' $env:ZIP_NAME --clobber --repo '${{ github.repository }}'
-          } else {
-            gh release create '${{ github.ref_name }}' $env:ZIP_NAME `
-              --repo '${{ github.repository }}' `
-              --title '${{ inputs.app-name }} ${{ github.ref_name }}' `
-              --generate-notes
+          $notesArgs = @('--generate-notes')
+          if ($env:RELEASE_NOTES) {
+            $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+            [IO.File]::WriteAllText($notesFile, $env:RELEASE_NOTES)
+            $notesArgs = @('--notes-file', $notesFile)
           }
+          gh release view $env:TAG --repo '${{ github.repository }}' 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG $env:ZIP_NAME --clobber --repo '${{ github.repository }}'
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            if ($env:RELEASE_NOTES) {
+              gh release edit $env:TAG --notes-file $notesFile --repo '${{ github.repository }}'
+            }
+          } else {
+            gh release create $env:TAG $env:ZIP_NAME `
+              --repo '${{ github.repository }}' `
+              --title '${{ inputs.app-name }} ${{ steps.version.outputs.tag }}' `
+              @notesArgs
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
