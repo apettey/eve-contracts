@@ -42,12 +42,16 @@ gh label create deploy:manual --color FBCA04 --description "Manual step needed b
 
 Merging is releasing. Every push to `main` runs `.github/workflows/release.yml`, one run at a time in merge order:
 
-1. **plan** (Linux): `bump.py release` finds the newest `vX.Y.Z` tag, looks up the merged PR of every first-parent
-   commit since it (`gh api repos/<repo>/commits/<sha>/pulls`, for labels and title), and picks the version.
+1. **plan** (Linux): `bump.py release` finds the newest *published* `vX.Y.Z` tag (its GitHub Release has the
+   Velopack `-full.nupkg`), looks up the merged PR of every first-parent commit since it (`gh api
+   repos/<repo>/commits/<sha>/pulls`, for labels and title), and picks the version.
    - The commit already has a `vX.Y.Z` tag (a re-run): that tag is reused. If its Release already has the Velopack
-     packages, nothing is built.
-   - The commit is already inside the newest tag's history (a newer run released it): no release.
-   - Otherwise one release for everything since the newest tag. Normally that is exactly the one merged PR.
+     packages, nothing is built; the run only checks the zip is there and re-applies the notes. If a newer published
+     release already contains the commit, the run does nothing.
+   - The commit is already inside the newest published release (a newer run released it): no release.
+   - Otherwise one release for everything since the newest published tag. Normally that is exactly the one merged
+     PR. A tag left by a failed run (no packages) is stepped over: the new version is numbered above it and its
+     commits are in the notes.
 2. **build** (Windows, the reusable `build-windows-app.yml` from the same commit): tests, `dotnet publish
    -p:Version=X.Y.Z`, Velopack pack, **then** creates the tag at the built commit, publishes the Velopack Release and
    attaches the zip. Nothing is tagged or published if the tests, publish or pack fail.
@@ -55,12 +59,17 @@ Merging is releasing. Every push to `main` runs `.github/workflows/release.yml`,
    its release-log link, and the compare link.
 
 GitHub keeps only the newest *pending* run per concurrency group. If three PRs merge while one build is running, the
-middle run is dropped, and the last run releases both remaining merges as one version. Nothing is lost.
+middle run is dropped, and the last run releases both remaining merges as one version. Nothing is lost. A re-run
+of an *old* run also joins that queue and can drop the pending run of a newer merge, which is why the runbook below
+says to dispatch on `main` instead once `main` has moved on.
 
 **Before merging:** the PR's "PR checks" run summary says `Merging this PR would release vX.Y.Z` and why. Wrong bump?
 Add a `semver:*` label; the check re-runs on label changes. The same workflow validates `whats-new/features.json`
 (`scripts/versioning/validate_features.py`: valid JSON, required fields, unique `pr`, images exist, entries added by
-this PR use its number) and runs the versioning tests.
+this PR use its number) and runs the versioning tests. Don't merge with "PR checks" red. A broken `features.json` on
+`main` makes the bump script treat the file as unknown (patch, no announcement notes) until it is fixed. The repo
+has no required checks today; making `release-checks` and `build-test` required in branch protection would enforce
+this.
 
 **After merging:** watch the run and check the result:
 
@@ -77,20 +86,29 @@ gh release view vX.Y.Z    # must list Setup.exe, the .nupkg files and the zip
 
 **By hand** (backlog recovery, or forcing a bump after the fact): Actions → Release → Run workflow on `main`, or
 `gh workflow run release.yml --ref main -f bump=minor`. `auto` applies the normal rules. A forced bump applies to
-everything since the newest tag.
+everything since the newest published tag. If `main`'s tip is already released, the run does nothing.
 
 ### If the release run fails
 
-The tag is created only after the artefact is built, so a failure before that leaves **no tag and no Release**.
-- **Before the tag** (tests, publish, vpk pack, or a flaky runner): nothing shipped. Flaky? `gh run rerun <id>
-  --failed`. A code failure? Fix it in a `fix/` PR. That merge's run releases the failed PR and the fix together under
-  one version, and the notes list both.
-- **After the tag, before the Velopack upload finished**: `gh run rerun <id> --failed`. The plan is kept and the
-  build reuses the tag (it refuses a tag pointing at a different commit).
-- **After the Velopack upload** (the Release has `Setup.exe`/`.nupkg`): the version has shipped. Never delete it.
-  `gh run rerun <id> --failed` re-runs the zip upload or the notes job; the build skips the Velopack upload it already
-  did. If that can't succeed, leave it and fix forward with the next merge.
-- **Plan failed** (e.g. the GitHub API was down): re-run it. Or the next merge's run picks this commit up.
+The tag is created only after the artefact is built, so most failures leave **no tag and no Release**. First check
+whether `main` has moved on since the failed commit (`git fetch && git log --oneline <sha>..origin/main`):
+
+- **`main` has moved on:** don't re-run the old run. A re-run joins the release queue, can drop a newer merge's
+  pending run, and would build an older version after a newer one. The newer merge's run (or, if that already
+  finished, `gh workflow run release.yml --ref main`) releases everything since the last *published* tag, including
+  the failed commit, numbered above any tag the failed run left behind.
+- **The failed commit is still `main`'s tip:**
+  - *Before the tag* (tests, publish, vpk pack): flaky (runner, network, quota)? `gh run rerun <id> --failed`. A
+    code failure? Fix it in a `fix/` PR; that merge's run releases the failed PR and the fix together under one
+    version, and the notes list both.
+  - *After the tag, before the Velopack upload finished:* `gh run rerun <id> --failed`. The build reuses the tag
+    (and refuses one pointing at a different commit).
+  - *After the Velopack upload* (the Release has `Setup.exe`/`.nupkg`): the version has shipped. Never delete it.
+    `gh run rerun <id> --failed` re-runs the zip upload or the notes; the build skips the Velopack upload it already
+    did. A full re-run doesn't rebuild a shipped version; it fails if the zip is missing and re-applies the notes.
+  - *Plan failed* (e.g. the GitHub API was down): `gh run rerun <id>`.
+- A shipped version whose zip can't be attached any more: attach it by hand or leave it; the installer and update
+  packages are what matter.
 
 ## Deploy
 

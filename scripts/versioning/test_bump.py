@@ -53,6 +53,13 @@ class DecideBump(unittest.TestCase):
         self.assertEqual(decide_bump([F], [], "{", "{not json").bump, "patch")
         self.assertEqual(decide_bump([F], [], "[]", '{"features": 3}').bump, "patch")
 
+    def test_repairing_broken_features_file_is_not_minor(self):
+        # before was unparseable: every old entry would look "added"
+        d = decide_bump([F], [], "{broken", features(1, 2, 3))
+        self.assertEqual(d.bump, "patch")
+        self.assertIn("invalid", d.reason)
+        self.assertEqual(bump.new_features("{broken", features(1, 2, 3)), [])
+
     def test_bool_pr_is_not_an_entry(self):
         after = json.dumps({"features": [{"pr": True}]})
         self.assertEqual(decide_bump([F], [], features(), after).bump, "patch")
@@ -181,8 +188,9 @@ class GitRepo(unittest.TestCase):
             self.prs[sha] = PullRequest(pr, msg, list(labels))
         return sha
 
-    def tag(self, name, rev="HEAD"):
-        subprocess.run(["git", "tag", name, rev], check=True)
+    def tag(self, name, rev="HEAD", annotated=False):
+        extra = ["-a", "-m", name] if annotated else []
+        subprocess.run(["git", "tag", *extra, name, rev], check=True)
 
     def lookup(self, sha):
         return self.prs.get(sha)
@@ -296,6 +304,63 @@ class GitRepo(unittest.TestCase):
         self.commit("main work", {"m.cs": "1"}, pr=32)
         with self.assertRaises(RuntimeError):
             plan_release("HEAD", self.lookup)
+
+    def test_annotated_tags(self):
+        self.tag("v1.0.0", annotated=True)
+        self.commit("Fix", {"a.cs": "1"}, pr=40)
+        p = plan_release("HEAD", self.lookup)
+        self.assertEqual((p.version, p.previous), ("1.0.1", "v1.0.0"))
+        self.tag("v1.0.1", annotated=True)
+        p = plan_release("HEAD", self.lookup)
+        self.assertTrue(p.reused_tag)
+        self.assertEqual(p.version, "1.0.1")
+
+    def test_unpublished_tag_is_rolled_forward(self):
+        # run for #41 tagged v1.0.1 then failed before publishing; #42's run must
+        # release both, above the dangling tag, and list #41 in the notes
+        self.commit("features", {F: features()})
+        self.tag("v1.0.0")
+        self.commit("Feature", {F: features(41)}, pr=41)
+        self.tag("v1.1.0")
+        self.commit("Fix", {"a.cs": "1"}, pr=42)
+        p = plan_release("HEAD", self.lookup, published=lambda t: t != "v1.1.0")
+        self.assertEqual((p.previous, p.bump, p.version), ("v1.0.0", "minor", "1.1.1"))
+        self.assertEqual([c.pr.number for c in p.commits], [41, 42])
+        self.assertIn("skips unpublished v1.1.0", p.reason)
+        self.assertIn("## Feature 41", bump.release_notes(p, "o/r"))
+
+    def test_unpublished_tag_rolled_forward_keeps_bigger_bump(self):
+        self.tag("v1.0.0")
+        self.commit("Fix", {"a.cs": "1"}, pr=43)
+        self.tag("v1.0.1")
+        self.commit("Feature", {"b.cs": "1"}, pr=44, labels=["semver:minor"])
+        p = plan_release("HEAD", self.lookup, published=lambda t: t != "v1.0.1")
+        self.assertEqual(p.version, "1.1.0")  # above v1.0.1 already, no collision
+
+    def test_rerun_of_superseded_tag_is_skipped(self):
+        self.tag("v1.0.0")
+        old = self.commit("Fix", {"a.cs": "1"}, pr=45)
+        self.tag("v1.0.1")  # never published
+        self.commit("Docs", {"d.md": "1"}, pr=46)
+        self.tag("v1.0.2")  # the next run released both
+        p = plan_release(old, self.lookup, published=lambda t: t != "v1.0.1")
+        self.assertTrue(p.skip)
+        self.assertIn("superseded by v1.0.2", p.reason)
+
+    def test_rerun_of_unpublished_tag_reuses_it(self):
+        self.tag("v1.0.0")
+        self.commit("Fix", {"a.cs": "1"}, pr=47)
+        self.tag("v1.0.1")
+        p = plan_release("HEAD", self.lookup, published=lambda t: t != "v1.0.1")
+        self.assertTrue(p.reused_tag)
+        self.assertEqual((p.version, p.previous), ("1.0.1", "v1.0.0"))
+
+    def test_only_unpublished_tags(self):
+        self.tag("v1.0.0")
+        self.commit("Fix", {"a.cs": "1"}, pr=48)
+        p = plan_release("HEAD", self.lookup, published=lambda t: False)
+        self.assertEqual(p.version, "1.0.1")
+        self.assertEqual(len(p.commits), 2)  # whole history: nothing was ever published
 
     def test_pr_cli_previews_against_base(self):
         self.commit("features", {F: features()})

@@ -8,8 +8,8 @@
 #
 # One run at a time, in merge order. GitHub keeps only the newest pending run per concurrency
 # group, so if merges outpace builds a pending run can be dropped; the next run then releases
-# everything since the last tag in one version (biggest bump wins). Nothing is ever skipped.
-# Re-running a run whose commit is already tagged reuses that tag.
+# everything since the last published tag in one version (biggest bump wins). Nothing is ever
+# skipped. Re-running a run whose commit is already tagged reuses that tag.
 name: Release
 
 on:
@@ -37,21 +37,26 @@ jobs:
       contents: read
       pull-requests: read # PR labels/title for the merged commit
     outputs:
-      skip: ${{ steps.final.outputs.skip }}
+      skip: ${{ steps.plan.outputs.skip }}
+      build: ${{ steps.shipped.outputs.build }}
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
       notes: ${{ steps.plan.outputs.notes }}
     steps:
       - name: Only main is released
         if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
         run: |
-          echo "::error::Releases are cut from main only (got ${{ github.ref }})"
+          echo "::error::Releases are cut from main only (got $REF)"
           exit 1
 
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history + tags: the version is computed from the latest vX.Y.Z
 
+      # Only tags whose Release has the Velopack packages count as released; a tag left by a
+      # failed run is skipped over and its commits go out with this release.
       - name: Compute version
         id: plan
         env:
@@ -63,39 +68,48 @@ jobs:
           cat plan.txt
           cat plan.txt >> "$GITHUB_OUTPUT"
 
-      # A re-run of a commit whose Release already carries the Velopack packages has shipped:
-      # nothing to build. (`gh run rerun --failed` re-runs only the failed jobs and keeps this
-      # plan, so a failed zip upload can still be retried.)
-      - name: Skip if already shipped
+      # A re-run of a commit whose Release already has the Velopack packages has shipped: don't
+      # build again (re-packing an existing version fails), but still check the zip and re-apply
+      # the notes, so a green run means a complete Release.
+      - name: Already shipped?
         id: shipped
-        if: steps.plan.outputs.reused == 'true'
+        if: steps.plan.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          REUSED: ${{ steps.plan.outputs.reused }}
         run: |
-          if gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -q -- '-full\.nupkg$'; then
-            echo "$TAG is already published with packages; nothing to do."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          assets=""
+          if [ "$REUSED" = "true" ]; then
+            assets=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          fi
+          if printf '%s\n' "$assets" | grep -q -- '-full\.nupkg$'; then
+            if ! printf '%s\n' "$assets" | grep -qx -- "ContractTracker-$VERSION-win-x64.zip"; then
+              echo "::error::$TAG is published but has no zip. Re-run only the failed jobs of the run that published it (gh run rerun <id> --failed), or attach the zip by hand."
+              exit 1
+            fi
+            echo "$TAG is already published; only the notes are re-applied."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Summary
-        id: final
         env:
-          SKIP: ${{ steps.plan.outputs.skip == 'true' || steps.shipped.outputs.skip == 'true' }}
+          SKIP: ${{ steps.plan.outputs.skip }}
           TAG: ${{ steps.plan.outputs.tag }}
           REASON: ${{ steps.plan.outputs.reason }}
         run: |
           if [ "$SKIP" = "true" ]; then
-            echo "### No release: ${REASON:-already shipped}" >> "$GITHUB_STEP_SUMMARY"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "### No release: $REASON" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### Releasing $TAG" >> "$GITHUB_STEP_SUMMARY"
-            echo "$REASON" >> "$GITHUB_STEP_SUMMARY"
+            printf '### Releasing %s\n\n%s\n' "$TAG" "$REASON" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   build:
     needs: plan
-    if: needs.plan.outputs.skip != 'true' && needs.plan.outputs.tag != ''
+    if: needs.plan.outputs.skip != 'true' && needs.plan.outputs.build == 'true'
     # Same commit's copy of the reusable workflow, so changes to it ship in lockstep.
     uses: ./.github/workflows/build-windows-app.yml
     permissions:
@@ -110,6 +124,10 @@ jobs:
 
   notes:
     needs: [plan, build]
+    # after a successful build, or when the plan found the Release already shipped
+    if: >-
+      always() && needs.plan.result == 'success' && needs.plan.outputs.skip != 'true' &&
+      (needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.plan.outputs.build == 'false'))
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -71,19 +71,26 @@ def next_version(latest: Version | None, bump: str) -> Version:
     raise ValueError(f"unknown bump {bump!r}")
 
 
-def feature_prs(text: str | None) -> set[int]:
-    """PR numbers in a features.json text. Missing or unparseable counts as empty:
+def feature_prs(text: str | None) -> set[int] | None:
+    """PR numbers in a features.json text. A missing file is empty; an unparseable one is
+    None (unknown), so a PR that repairs a broken file doesn't count every old entry as new.
     validate_features.py is what fails a PR on bad JSON, not the bump."""
     if not text:
         return set()
     try:
         data = json.loads(text)
     except ValueError:
-        return set()
+        return None
     entries = data.get("features") if isinstance(data, dict) else None
     if not isinstance(entries, list):
-        return set()
+        return None
     return {e["pr"] for e in entries if isinstance(e, dict) and type(e.get("pr")) is int}
+
+
+def added_feature_prs(before: str | None, after: str | None) -> set[int] | None:
+    """Entries added between two versions of features.json; None if either side is broken."""
+    b, a = feature_prs(before), feature_prs(after)
+    return None if a is None or b is None else a - b
 
 
 @dataclass
@@ -103,7 +110,10 @@ def decide_bump(
         best = max(label_bumps, key=ORDER.__getitem__)
         return Decision(best, f"label semver:{best}")
     if FEATURES_PATH in {p.strip() for p in changed_paths}:
-        added = feature_prs(features_after) - feature_prs(features_before)
+        added = added_feature_prs(features_before, features_after)
+        if added is None:
+            return Decision("patch", f"default ({FEATURES_PATH} was invalid before or after this "
+                                     "change, so new entries can't be told apart; label it if minor)")
         if added:
             prs = ", ".join(f"#{n}" for n in sorted(added))
             return Decision("minor", f"adds a {FEATURES_PATH} entry ({prs})")
@@ -184,7 +194,7 @@ class RangePlan:
 
 
 def new_features(before: str | None, after: str | None) -> list[dict]:
-    added = feature_prs(after) - feature_prs(before)
+    added = added_feature_prs(before, after)
     if not added:
         return []
     entries = json.loads(after)["features"]
@@ -218,37 +228,55 @@ def collect(previous: str, head: str, lookup: PrLookup) -> list[CommitRelease]:
     return out
 
 
-def plan_release(head: str, lookup: PrLookup, force_bump: str = "") -> RangePlan:
+Published = Callable[[str], bool]
+
+
+def plan_release(head: str, lookup: PrLookup, force_bump: str = "",
+                 published: Published = lambda tag: True) -> RangePlan:
     """Plan the release for `head` (a commit on main).
 
-    - head already carries a vX.Y.Z tag: reuse it (re-run of a released or half-released commit).
-    - head is already inside the newest tag's history: skip (a newer run released it).
-    - otherwise: one release covering every first-parent commit since the newest tag. Normally
-      that is exactly one squash-merged PR; it is more only when a run was cancelled or failed.
+    Only tags whose GitHub Release carries the Velopack packages count as released
+    (`published`). A tag left behind by a run that failed after tagging is skipped over:
+    its commits are released again by the next run, under a number above it.
+
+    - head already carries a vX.Y.Z tag: reuse it (re-run of a half-released commit),
+      unless a newer published release already contains head (then skip: re-building an
+      older version after a newer one is out would fail to pack, or downgrade nobody).
+    - head is already inside the newest published release: skip.
+    - otherwise: one release covering every first-parent commit since the newest published
+      tag. Normally that is exactly one squash-merged PR; it is more only when a run was
+      dropped or failed.
     """
     head = git("rev-parse", head).strip()
-    tags = git_tags()
+    tags = sorted((t for t in git_tags() if parse_tag(t)), key=parse_tag, reverse=True)
+    highest = parse_tag(tags[0]) if tags else None
 
+    def newest_published(below: Version | None = None) -> str:
+        for t in tags:
+            if (below is None or parse_tag(t) < below) and published(t):
+                return t
+        return ""
+
+    latest_pub = newest_published()
     at_head = version_tags_at(head)
     if at_head:
         tag = max(at_head, key=parse_tag)
-        below = [t for t in tags if parse_tag(t) and parse_tag(t) < parse_tag(tag)]
-        lower = latest_version(below)
-        previous = "v" + fmt(lower) if lower else ""
+        if latest_pub and parse_tag(latest_pub) > parse_tag(tag) and is_ancestor(head, tag_commit(latest_pub)):
+            return RangePlan(True, f"{tag} at {head[:7]} was superseded by {latest_pub}, which contains it")
+        previous = newest_published(parse_tag(tag))
         plan = RangePlan(False, f"{head[:7]} is already tagged {tag}; reusing it",
                          version=tag[1:], previous=previous, reused_tag=True)
         plan.commits = collect(previous, head, lookup)
         return plan
 
-    latest = latest_version(tags)
-    previous = ""
-    if latest is not None:
-        previous = "v" + fmt(latest)
+    previous = latest_pub
+    if previous:
         prev_sha = tag_commit(previous)
         if is_ancestor(head, prev_sha):
             return RangePlan(True, f"{head[:7]} is already part of {previous}")
         if not is_ancestor(prev_sha, head):
             raise RuntimeError(f"{previous} ({prev_sha[:7]}) is not an ancestor of {head[:7]}")
+    latest = parse_tag(previous) if previous else None
 
     plan = RangePlan(False, "", previous=previous, commits=collect(previous, head, lookup))
     if not plan.commits:
@@ -264,9 +292,15 @@ def plan_release(head: str, lookup: PrLookup, force_bump: str = "") -> RangePlan
         plan.bump = max_bump(c.decision.bump for c in plan.commits)
         plan.reason = (f"{len(plan.commits)} commits since {previous or 'the start'}, "
                        f"biggest bump wins: {plan.bump}")
-    plan.version = fmt(next_version(latest, plan.bump))
-    if latest is None:
+    version = next_version(latest, plan.bump)
+    if highest is not None and version <= highest:
+        # an unpublished tag (failed run) holds this number; never reuse or go below a tag
+        unpublished = [t for t in tags if latest is None or parse_tag(t) > latest]
+        version = next_version(highest, "patch")
+        plan.reason += f"; skips unpublished {', '.join(sorted(unpublished, key=parse_tag))}"
+    elif latest is None and highest is None:
         plan.reason += f"; first release is {fmt(FIRST_VERSION)}"
+    plan.version = fmt(version)
     return plan
 
 
@@ -305,6 +339,21 @@ def gh_pr_lookup(repo: str) -> PrLookup:
         p = prs[0]
         return PullRequest(p["number"], p["title"], [l["name"] for l in p.get("labels", [])])
     return lookup
+
+
+def gh_published(repo: str) -> Published:
+    """A tag counts as released when its GitHub Release (not a draft) has a -full.nupkg."""
+    def published(tag: str) -> bool:
+        r = subprocess.run(["gh", "api", f"repos/{repo}/releases/tags/{tag}"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            if "HTTP 404" in r.stderr:
+                return False
+            raise RuntimeError(f"gh api releases/tags/{tag} failed: {r.stderr.strip()}")
+        rel = json.loads(r.stdout)
+        return not rel.get("draft") and any(
+            a.get("name", "").endswith("-full.nupkg") for a in rel.get("assets", []))
+    return published
 
 
 # ---------------------------------------------------------------- output
@@ -376,7 +425,8 @@ def main(argv: list[str] | None = None) -> int:
               "latest": "v" + fmt(latest) if latest else ""})
         return 0
 
-    plan = plan_release(a.head, gh_pr_lookup(a.repo), "" if a.bump == "auto" else a.bump)
+    plan = plan_release(a.head, gh_pr_lookup(a.repo), "" if a.bump == "auto" else a.bump,
+                        gh_published(a.repo))
     out = {"skip": "true" if plan.skip else "false", "reason": plan.reason,
            "bump": plan.bump, "version": plan.version,
            "tag": f"v{plan.version}" if plan.version else "",
