@@ -117,9 +117,10 @@ def state_messages(tag: str, st: ReleaseStatus, labels_prerelease: bool, build_r
                       f"the draft with 'gh release edit {tag} --draft=false' if it has every file, or "
                       "delete the draft and run the release workflow again on the default branch.")
     elif not st.zip:
-        errors.append(f"{tag} has shipped but has no zip. Attach it by hand from the build run's "
-                      "artifacts (gh release upload); the notes are set, and this check fails on every "
-                      "run for this commit until the zip is there.")
+        errors.append(f"{tag} has shipped but has no zip. Attach it by hand with gh release upload: "
+                      "from the build run's artifacts (kept 7 days), or else rebuilt from the tag "
+                      "(dotnet publish -p:Version=<X.Y.Z>, zipped as <app>-<X.Y.Z>-<runtime>.zip). The "
+                      "notes are set; this check fails on every run for this commit until the zip is there.")
     return summary, warnings, errors, shipped
 
 

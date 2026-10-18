@@ -120,9 +120,11 @@ whether `main` has moved on since the failed commit (`git fetch && git log --one
     `gh run rerun <id> --failed` re-runs the zip upload or the notes; the build skips the Velopack upload it already
     did. A full re-run doesn't rebuild a shipped version; it re-applies the notes and fails if the zip is missing.
   - *version failed* (e.g. the GitHub API was down): `gh run rerun <id>`.
-- A shipped version whose zip is missing: attach it by hand (`gh release upload vX.Y.Z <zip>` from the build run's
-  artifacts). Until then the finalize check fails on every run for that commit; the installer and update packages
-  already work.
+- A shipped version whose zip is missing: attach it by hand with `gh release upload vX.Y.Z <zip>`. Take the zip from
+  the build run's artifacts (kept 7 days). After that, rebuild it from the tag: `git checkout vX.Y.Z`, then `dotnet
+  publish src/EveContracts.App/EveContracts.App.csproj -c Release -r win-x64 --self-contained true -p:Version=X.Y.Z -o
+  publish`, and zip the folder's contents as `ContractTracker-X.Y.Z-win-x64.zip`. Until the zip is attached, the
+  finalize check fails on every run for that commit; the installer and update packages already work.
 
 ## Deploy
 
