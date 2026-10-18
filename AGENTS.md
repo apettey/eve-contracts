@@ -13,10 +13,11 @@ Guidance for AI agents (and humans) contributing to this repository.
 
 Every change follows the **`ship-change`** skill (`.claude/skills/ship-change/SKILL.md`). These six rules are blocking:
 
-1. Tests are in place, and the full suite passes locally (code changes; needs Windows) and in CI.
+1. Tests are in place, and the full suite passes locally (code changes; needs Windows) and in CI. PR CI also lints the workflows with actionlint.
 2. A fresh reviewer reviews the diff, and the loop repeats until a round has zero findings. The round count goes in the PR body.
 3. Every visible change has before/after screenshots in its release-log entry and in the PR.
 4. Every change gets a `changelog/` entry. Visible changes also get a `whats-new/features.json` entry.
+   PR CI fails a PR that adds no new `changelog/YYYY-MM-DD-<name>/README.md`. Only Dependabot PRs (author `dependabot[bot]`) are exempt.
 5. Every merged PR gets a new SemVer version. There is no skip. It is automatic: merging to `main` runs the Release workflow, which tags and publishes the version only after the build succeeds. Merging is releasing (and deploying).
 6. Release quickly: small PRs, merged the same day, released right after merge.
 

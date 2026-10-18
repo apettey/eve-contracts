@@ -66,7 +66,9 @@ says to dispatch on `main` instead once `main` has moved on.
 **Before merging:** the PR's "PR checks" run summary says `Merging this PR would release vX.Y.Z` and why. Wrong bump?
 Add a `semver:*` label; the check re-runs on label changes. The same workflow validates `whats-new/features.json`
 (`scripts/versioning/validate_features.py`: valid JSON, required fields, unique `pr`, images exist, entries added by
-this PR use its number) and runs the versioning tests. Don't merge with "PR checks" red. A broken `features.json` on
+this PR use its number), fails a PR that adds no new `changelog/YYYY-MM-DD-<name>/README.md`
+(`scripts/versioning/check_changelog.py`; Dependabot PRs, author `dependabot[bot]`, are exempt and still release as a
+patch), lints every workflow with a pinned, checksum-verified actionlint, and runs the `scripts/versioning` tests. Don't merge with "PR checks" red. A broken `features.json` on
 `main` makes the bump script treat the file as unknown (patch, no announcement notes) until it is fixed. The repo
 has no required checks today; making `release-checks` and `build-test` required in branch protection would enforce
 this.
@@ -120,7 +122,6 @@ what the step is in the PR, do it, then merge. Rollback means releasing the prev
 
 ## Automate next (not in place yet)
 
-- PR CI: fail a PR that adds no `changelog/` folder; lint workflows (actionlint).
 - An in-app "What's New" reading `whats-new/features.json`, keyed by the highest PR number the user has seen.
 
 `build-windows-app.yml` is shared with hangarscope and multi-box (`@main`), so changes to it affect those repos too.

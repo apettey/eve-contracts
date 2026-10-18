@@ -1,5 +1,5 @@
-# Release checks for pull requests: the version this PR would release, the announcement file
-# and the versioning scripts' own tests. Linux-only and separate from ci.yml, so a label change
+# Release checks for pull requests: the version this PR would release, the announcement file,
+# the PR's release-log entry, a lint of the workflows and the versioning scripts' own tests. Linux-only and separate from ci.yml, so a label change
 # (which can change the version) re-runs this in seconds without cancelling the Windows build.
 name: PR checks
 
@@ -26,6 +26,27 @@ jobs:
 
       - name: Versioning script tests
         run: python3 -m unittest discover -s scripts/versioning -v
+
+      # Pinned version, checksum-verified. Bump both together (sha256 from the release's checksums.txt).
+      - name: Lint workflows (actionlint)
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+      # Every PR adds changelog/YYYY-MM-DD-<name>/README.md; Dependabot PRs are exempt.
+      # HEAD is the PR merged into its base, so HEAD^1..HEAD is what the squash commit adds.
+      - name: Release-log entry
+        if: github.event_name == 'pull_request'
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: python3 scripts/versioning/check_changelog.py --base HEAD^1 --head HEAD --author "$AUTHOR"
 
       - name: Validate whats-new/features.json
         if: github.event_name == 'pull_request'

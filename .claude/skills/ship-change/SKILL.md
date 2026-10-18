@@ -12,7 +12,7 @@ The rules file (`AGENTS.md`) wins over this skill if they disagree; update both 
 1. **Tests are in place.** Every code change adds/updates tests for the behaviour it changes; the full suite passes locally (Windows) and in CI. Non-code changes need CI green.
 2. **Review loop.** A fresh reviewer (subagent that did not write it) reviews the diff; fix every finding; re-review; repeat until a round has **zero findings**. Round count goes in the PR body.
 3. **Screenshots.** Every visible change has a `before.png` (taken *before the first edit*) and `after.png` (final version) next to its release-log entry and in the PR.
-4. **Release log.** Every change, of any kind, gets a release-log entry in the same PR; visible changes also get an announcement entry.
+4. **Release log.** Every change, of any kind, gets a release-log entry in the same PR; visible changes also get an announcement entry. PR CI fails a PR that adds no new `changelog/YYYY-MM-DD-<name>/README.md`; only Dependabot PRs (author `dependabot[bot]`) are exempt.
 5. **Every merged PR is a new version.** No skip. Docs/CI/deps changes are a patch.
 6. **Release quickly.** Small PRs, merged the same day, released immediately after merge.
 
@@ -61,12 +61,12 @@ Steps marked *(visible)* are for visible changes only. Steps 4, 6, 7, 8 and 9 ar
 
 1. **Branch.** `git fetch origin && git switch --no-track -c <prefix><short-name> origin/main`. One change per PR, small enough to merge the same day. Another PR open? Stack on its branch, or leave `changelog/README.md` and `whats-new/features.json` alone until step 7 (see `references/formats.md`).
 2. **Before screenshot** *(visible)*. Before any edit: start the dev app (Repo values), open the affected screen and capture it at the fixed viewport. Keep it in the scratchpad until the release-log folder exists. Not on Windows? **Stop and ask** the user to capture it, or move the work to a Windows host. Never substitute a mockup or the design handoff.
-3. **Build with tests.** Put testable logic in Core. Write or update tests, covering empty, missing or unknown data, many characters, and ESI errors (304, 400, 403/404, 504, empty 200). A bug fix starts with a test that fails without the fix. *(code)* Run the full test cmd, both builds and the artefact build; all must pass. *(non-code)* No new tests are needed, but CI must be green on the PR. Don't commit `bin/`, `obj/` or `publish/`.
+3. **Build with tests.** Put testable logic in Core. Write or update tests, covering empty, missing or unknown data, many characters, and ESI errors (304, 400, 403/404, 504, empty 200). A bug fix starts with a test that fails without the fix. *(code)* Run the full test cmd, both builds and the artefact build; all must pass. *(non-code)* No new tests are needed, but CI must be green on the PR. Changed a workflow? Run `actionlint` (PR CI runs it too). Don't commit `bin/`, `obj/` or `publish/`.
 4. **Try it for real.**
    - *Code:* run the dev app through the main path, the edge cases and any setting that toggles it. Stub what you can't reach (SSO) and say so in the release log. Off Windows, this blocks: say so, don't claim it.
    - *Non-code:* check the actual output: rendered Markdown, valid JSON, a dry run or the workflow run on the PR.
 5. **After screenshot** *(visible)*. Same screen, same viewport, the **final** UI; retake it if review changes the UI. Update `README.md` and its `docs/img/` screenshot if the feature is documented there.
-6. **Release-log entry.** Create `changelog/YYYY-MM-DD-<short-name>/README.md` from `references/formats.md`, with `before.png`/`after.png` beside it. Record what was and wasn't run (tests, dev app, stubs). Changing an old feature gets a **new** entry; never rewrite old ones. Commit.
+6. **Release-log entry.** Create `changelog/YYYY-MM-DD-<short-name>/README.md` from `references/formats.md`, with `before.png`/`after.png` beside it. Record what was and wasn't run (tests, dev app, stubs). Changing an old feature gets a **new** entry; never rewrite old ones. Commit, then check it: `python3 scripts/versioning/check_changelog.py --base origin/main` (it reads commits, not the working tree; PR CI runs the same check).
 7. **Draft PR, announcement, index.**
    - `git fetch origin && git rebase origin/main`.
    - Add the index row at the top of `changelog/README.md`, then `git push -u origin HEAD`.
@@ -85,5 +85,5 @@ Steps marked *(visible)* are for visible changes only. Steps 4, 6, 7, 8 and 9 ar
 
 - `references/formats.md`: release-log template and index row, announcement JSON, PR body.
 - `references/review-loop.md`: reviewer brief ready to paste into a subagent.
-- `references/versioning-and-release.md`: bump rules, how the automatic release runs, failed releases, what to automate next.
+- `references/versioning-and-release.md`: bump rules, what PR CI checks, how the automatic release runs, failed releases, what to automate next.
 - `references/checklist.md`: copy-paste checklist for the PR or your own tracking.
