@@ -17,14 +17,14 @@ public class SdeService
     private const string DumpBase = "https://www.fuzzwork.co.uk/dump/latest/csv/";
     public static readonly TimeSpan MaxAge = TimeSpan.FromDays(7);
 
-    public static readonly IReadOnlyDictionary<string, int> Regions = new Dictionary<string, int>
-    {
-        ["The Forge"] = 10000002,
-        ["Domain"] = 10000043,
-        ["Sinq Laison"] = 10000032,
-        ["Heimatar"] = 10000030,
-        ["Metropolis"] = 10000042,
-    };
+    /// <summary>Region choice that scans and shows every known-space region at once.</summary>
+    public const string AllRegions = "All regions";
+
+    /// <summary>The five trade-hub regions, listed first in region pickers.</summary>
+    public static readonly IReadOnlyList<string> TradeHubRegions = ["The Forge", "Domain", "Sinq Laison", "Heimatar", "Metropolis"];
+
+    /// <summary>Wormhole (11xxxxxx) and Abyssal (12xxxxxx) regions have no public contract market.</summary>
+    public static bool IsKnownSpace(int regionId) => regionId is >= 10000000 and < 11000000;
 
     private readonly IServiceScopeFactory _scopes;
     private readonly IHttpClientFactory _httpFactory;
@@ -85,7 +85,7 @@ public class SdeService
     {
         var http = _httpFactory.CreateClient("sde");
         string[] files = ["invTypes.csv", "invGroups.csv", "invVolumes.csv",
-                          "mapSolarSystems.csv", "staStations.csv", "mapSolarSystemJumps.csv"];
+                          "mapSolarSystems.csv", "staStations.csv", "mapSolarSystemJumps.csv", RegionsFile];
         foreach (var f in files)
         {
             ct.ThrowIfCancellationRequested();
@@ -192,6 +192,7 @@ public class SdeService
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDb>();
         await Data.BulkOps.ReplaceStaticDataAsync(db, types, systems, stations, ct);
+        await SaveRegionsAsync(db, ct);
         var stampRow = await db.AppSettings.FindAsync(["sde_downloaded_at"], ct);
         if (stampRow is null) db.AppSettings.Add(new AppSetting { Key = "sde_downloaded_at", Value = DateTime.UtcNow.ToString("o") });
         else stampRow.Value = DateTime.UtcNow.ToString("o");
@@ -199,6 +200,40 @@ public class SdeService
         _log.LogInformation("SDE loaded: {Types} types, {Systems} systems, {Stations} stations", types.Count, systems.Count, stations.Count);
         await _static.LoadAsync(ct);
         Progress?.Invoke("Static data ready.");
+    }
+
+    private const string RegionsFile = "mapRegions.csv";
+
+    /// <summary>
+    /// Region names arrived after the first SDE layout; installs whose static data is
+    /// otherwise fresh fetch just this one small file instead of waiting for a refresh.
+    /// </summary>
+    public async Task EnsureRegionsAsync(CancellationToken ct = default)
+    {
+        using var scope = _scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDb>();
+        if (await db.Regions.AnyAsync(ct)) return;
+        var path = Path.Combine(AppPaths.SdeDir, RegionsFile);
+        if (!File.Exists(path))
+        {
+            _log.LogInformation("SDE: downloading {File}", RegionsFile);
+            var bytes = await _httpFactory.CreateClient("sde").GetByteArrayAsync(DumpBase + RegionsFile, ct);
+            await File.WriteAllBytesAsync(path, bytes, ct);
+        }
+        await SaveRegionsAsync(db, ct);
+        await _static.LoadAsync(ct);
+    }
+
+    private async Task SaveRegionsAsync(AppDb db, CancellationToken ct)
+    {
+        var regions = new List<Region>(120);
+        foreach (var row in ReadCsv(RegionsFile, out var rCols))
+            if (int.TryParse(row[rCols["regionID"]], out var rid) && IsKnownSpace(rid))
+                regions.Add(new Region { RegionId = rid, Name = row[rCols["regionName"]] });
+        await db.Regions.ExecuteDeleteAsync(ct);
+        db.Regions.AddRange(regions);
+        await db.SaveChangesAsync(ct);
+        _log.LogInformation("SDE: {Count} known-space regions", regions.Count);
     }
 
     private IEnumerable<string[]> ReadCsv(string file, out Dictionary<string, int> cols)

@@ -16,6 +16,7 @@ public class AppDb : DbContext
     public DbSet<ItemSetting> ItemSettings => Set<ItemSetting>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ItemType> ItemTypes => Set<ItemType>();
+    public DbSet<Region> Regions => Set<Region>();
     public DbSet<SolarSystem> SolarSystems => Set<SolarSystem>();
     public DbSet<Station> Stations => Set<Station>();
     public DbSet<EsiEtag> EsiEtags => Set<EsiEtag>();
@@ -57,6 +58,7 @@ public class AppDb : DbContext
             e.HasKey(x => x.TypeId);
             e.HasIndex(x => x.CategoryId);
         });
+        b.Entity<Region>().HasKey(x => x.RegionId);
         b.Entity<SolarSystem>().HasKey(x => x.SolarSystemId);
         b.Entity<Station>().HasKey(x => x.StationId);
         b.Entity<EsiEtag>().HasKey(x => x.Url);

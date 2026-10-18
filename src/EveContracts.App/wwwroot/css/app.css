@@ -125,7 +125,7 @@ input[type="checkbox"] { accent-color: var(--violet); }
 /* ===== Scanner table ===== */
 .tbl-wrap { flex: 1; overflow: auto; }
 .scan-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 1fr 90px 90px 90px 90px 70px 80px; gap: 14px; }
-.browse-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 84px 1fr 90px 100px 90px 70px 80px; gap: 14px; }
+.browse-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) 84px 1fr 90px 100px 112px 70px 80px; gap: 14px; }
 .search-group { flex: 1; min-width: 220px; max-width: 420px; }
 input.search { width: 100%; }
 .tbl-head {

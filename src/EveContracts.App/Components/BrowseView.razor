@@ -5,6 +5,7 @@
 @inject PublicContractSync PublicSync
 @inject SettingsService Settings
 @inject SyncScheduler Scheduler
+@inject StaticDataCache Static
 
 <div class="view">
     <div class="main-col">
@@ -19,7 +20,7 @@
             <div class="fgroup">
                 <label class="flabel">Region</label>
                 <select value="@Ui.Region" @onchange="OnRegionChange">
-                    @foreach (var r in EveContracts.Core.Sde.SdeService.Regions.Keys)
+                    @foreach (var r in Static.RegionChoices)
                     {
                         <option value="@r">@r</option>
                     }
@@ -101,11 +102,19 @@
                     </div>
                     <div><span class="badge @TypeClass(row.Type)">@TypeLabel(row.Type)</span></div>
                     <div class="cell-loc">
-                        <span>@row.System</span>
+                        <span>@LocationLine(row)</span>
                         <span class="st">@(row.Type == "courier" && row.Destination != "" ? $"{row.Station} → {row.Destination}" : row.Station)</span>
                     </div>
                     <div class="r num-sm">
-                        <span class="@(row.Sec >= 0.45 ? "sec-hi" : "sec-lo")">@row.Sec.ToString("0.0", Inv)</span><span class="dimtxt"> · @(row.Jumps)j</span>
+                        @if (row.System == "")
+                        {
+                            @* Player structure outside the SDE: system, security and route are unknown. *@
+                            <span class="dimtxt" title="player structure — system unknown">—</span>
+                        }
+                        else
+                        {
+                            <span class="@(row.Sec >= 0.45 ? "sec-hi" : "sec-lo")">@row.Sec.ToString("0.0", Inv)</span><span class="dimtxt"> · @(row.Jumps)j</span>
+                        }
                     </div>
                     <div class="r num">
                         @if (row.Type == "courier")
@@ -156,6 +165,13 @@
         await ReloadAsync();
         if (Ui.SelectedBrowseId is long id) _detail = await Query.GetDetailAsync(id);
     }
+
+    private string LocationLine(BrowseRow row) =>
+        !AllRegions || row.Region == "" ? (row.System == "" ? "Unknown system" : row.System)
+        : row.System == "" ? row.Region
+        : $"{row.System} · {row.Region}";
+
+    private bool AllRegions => Ui.Region == EveContracts.Core.Sde.SdeService.AllRegions;
 
     private BrowseFilter Filter => new(Ui.Region, Ui.BrowseSearch, Ui.BrowseType, Ui.BrowseHighsecOnly, Ui.BrowseSort);
 

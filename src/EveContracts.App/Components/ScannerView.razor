@@ -5,6 +5,7 @@
 @inject PublicContractSync PublicSync
 @inject SettingsService Settings
 @inject SyncScheduler Scheduler
+@inject StaticDataCache Static
 
 <div class="view">
     <div class="main-col">
@@ -13,7 +14,7 @@
             <div class="fgroup">
                 <label class="flabel">Region</label>
                 <select value="@Ui.Region" @onchange="OnRegionChange">
-                    @foreach (var r in EveContracts.Core.Sde.SdeService.Regions.Keys)
+                    @foreach (var r in Static.RegionChoices)
                     {
                         <option value="@r">@r</option>
                     }
