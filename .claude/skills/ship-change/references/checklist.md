@@ -14,6 +14,7 @@
 
 ### Document
 - [ ] changelog/YYYY-MM-DD-<name>/README.md (+ before/after), saying what was and wasn't run
+- [ ] `python3 scripts/versioning/check_changelog.py --base origin/main` passes; workflow change: `actionlint` clean
 
 ### Draft PR
 - [ ] Rebased on origin/main; index row at the top of changelog/README.md

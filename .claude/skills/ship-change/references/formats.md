@@ -30,6 +30,11 @@ changes, tests added, anything stubbed while testing (e.g. "SSO stubbed; Own Con
 
 Keep it short; it is a log, not documentation (feature docs live in `README.md`).
 
+The "PR checks" workflow fails a PR that adds no such folder: `scripts/versioning/check_changelog.py` needs a
+`changelog/<folder>/README.md` whose folder is new in the PR, with a real date and a lower-case hyphenated name.
+Editing an old entry doesn't count. Dependabot PRs (author `dependabot[bot]`) are exempt. Check locally after
+committing (it reads commits, not the working tree): `python3 scripts/versioning/check_changelog.py --base origin/main`.
+
 ### Index row
 
 Add at the **top** of the table in `changelog/README.md`, after rebasing on the latest `main`:
