@@ -1,6 +1,6 @@
 # Build + test gate for pull requests (including Dependabot's).
-# The Release workflow ships tags; this one just proves a PR compiles and
-# passes tests, so it is safe to merge. Kept lightweight (no Velopack pack).
+# The Release workflow ships every merge to main; this one just proves a PR
+# compiles and passes tests, so it is safe to merge. Kept lightweight (no Velopack pack).
 name: CI
 
 on:

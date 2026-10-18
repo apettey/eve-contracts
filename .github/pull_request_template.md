@@ -22,5 +22,5 @@ Release log: `changelog/YYYY-MM-DD-<name>/`
 - [ ] Release-log entry: `changelog/YYYY-MM-DD-<name>/` (with before/after if visible) + index row
 - [ ] Visible to users? `whats-new/features.json` entry with this PR's number
 - [ ] Review loop done: <N> rounds, last one with no findings
-- [ ] Version bump: default (announcement = minor, everything else = patch) or a `semver:*` label (visible fix = `semver:patch`)
+- [ ] Version: the "PR checks" summary says the expected `vX.Y.Z` (announcement = minor, everything else = patch; override with a `semver:*` label, visible fix = `semver:patch`). Merging releases it
 - [ ] Code change: release artefact builds locally (`dotnet publish ... -r win-x64`)

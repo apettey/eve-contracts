@@ -12,6 +12,9 @@
 # Produces a ready-to-run, self-contained win-x64 zip:
 #  - every run: uploaded as a workflow artifact
 #  - runs for a v* tag: attached to a GitHub Release for that tag
+#  - runs with `release-tag` + `version` (release-on-merge callers): built as that version,
+#    then the tag is created at the built commit and the Release published, only after the
+#    artefact exists. Callers that pass neither input behave exactly as before.
 name: Build Windows App
 
 on:
@@ -63,6 +66,21 @@ on:
         required: false
         type: string
         default: ""
+      version:
+        description: >-
+          X.Y.Z to build. Only used together with release-tag; tag-ref and branch builds
+          keep deriving it from the ref.
+        required: false
+        type: string
+        default: ""
+      release-tag:
+        description: >-
+          Release as this tag (e.g. v1.2.3) from a non-tag ref. The tag is created at the
+          built commit after packing (reused if it already points there) and the Release is
+          published to it. Empty = old behaviour (release only when the ref is a v* tag).
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -79,8 +97,19 @@ jobs:
       - name: Compute version
         id: version
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ inputs.release-tag }}
         run: |
-          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(?<v>\d+\.\d+\.\d+.*)$') {
+          $tag = '${{ github.ref_name }}'
+          if ($env:INPUT_TAG) {
+            if ($env:INPUT_VERSION -notmatch '^\d+\.\d+\.\d+$' -or $env:INPUT_TAG -ne "v$env:INPUT_VERSION") {
+              throw "release-tag '$env:INPUT_TAG' needs version X.Y.Z with tag vX.Y.Z (got '$env:INPUT_VERSION')"
+            }
+            $version = $env:INPUT_VERSION
+            $release = 'true'
+            $tag = $env:INPUT_TAG
+          } elseif ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(?<v>\d+\.\d+\.\d+.*)$') {
             $version = $Matches.v
             $release = 'true'
           } else {
@@ -90,7 +119,8 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "release=$release" >> $env:GITHUB_OUTPUT
-          Write-Host "Version: $version (release: $release)"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version (release: $release, tag: $tag)"
 
       - name: Test
         if: inputs.test-project != ''
@@ -159,17 +189,49 @@ jobs:
           path: Releases/
           retention-days: 7
 
+      # release-tag mode only: the artefact now exists, so create the tag at the built commit.
+      # Creating it explicitly (instead of letting the Release create it) pins it to github.sha
+      # even if main has moved on. An existing tag is reused only if it points at this commit.
+      - name: Create tag (release-tag builds)
+        if: inputs.release-tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $existing = gh api "repos/${{ github.repository }}/git/ref/tags/$env:TAG" --jq '.object.sha' 2>$null
+          if ($LASTEXITCODE -eq 0 -and $existing) {
+            # annotated tags point at a tag object; peel to the commit
+            $commit = gh api "repos/${{ github.repository }}/commits/$env:TAG" --jq '.sha'
+            if ($commit -ne '${{ github.sha }}') { throw "$env:TAG already exists at $commit, not ${{ github.sha }}" }
+            Write-Host "$env:TAG already points at ${{ github.sha }}; reusing it"
+          } else {
+            gh api "repos/${{ github.repository }}/git/refs" -f "ref=refs/tags/$env:TAG" -f 'sha=${{ github.sha }}' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "could not create $env:TAG" }
+            Write-Host "Created $env:TAG at ${{ github.sha }}"
+          }
+
       - name: Publish Velopack packages to release (tag builds)
         if: inputs.main-exe != '' && steps.version.outputs.release == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
+          # A re-run of a release-tag build whose packages were already published must not
+          # publish again: installed copies may already be on it.
+          if ('${{ inputs.release-tag }}') {
+            $assets = gh release view $env:TAG --repo '${{ github.repository }}' --json assets --jq '.assets[].name' 2>$null
+            if ($LASTEXITCODE -eq 0 -and ($assets | Where-Object { $_ -like '*-full.nupkg' })) {
+              Write-Host "$env:TAG already has Velopack packages; not uploading again"
+              exit 0
+            }
+          }
           vpk upload github --repoUrl 'https://github.com/${{ github.repository }}' `
             --token $env:GH_TOKEN `
             --publish `
-            --releaseName '${{ inputs.app-name }} ${{ github.ref_name }}' `
-            --tag '${{ github.ref_name }}'
+            --releaseName "${{ inputs.app-name }} $env:TAG" `
+            --tag $env:TAG
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Release (tag builds)
@@ -177,13 +239,15 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' 2>$null
+          gh release view $env:TAG --repo '${{ github.repository }}' 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload '${{ github.ref_name }}' $env:ZIP_NAME --clobber --repo '${{ github.repository }}'
+            gh release upload $env:TAG $env:ZIP_NAME --clobber --repo '${{ github.repository }}'
           } else {
-            gh release create '${{ github.ref_name }}' $env:ZIP_NAME `
+            gh release create $env:TAG $env:ZIP_NAME `
               --repo '${{ github.repository }}' `
-              --title '${{ inputs.app-name }} ${{ github.ref_name }}' `
+              --title "${{ inputs.app-name }} $env:TAG" `
+              --verify-tag `
               --generate-notes
           }

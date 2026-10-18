@@ -27,6 +27,6 @@
 - [ ] Repeated until a round had zero findings; round count in the PR body
 
 ### Release
-- [ ] PR marked ready, CI green, squash-merged
-- [ ] Released right after: vX.Y.Z tag build green, GitHub Release has installer + packages
+- [ ] PR marked ready, CI green, "PR checks" says the expected vX.Y.Z, squash-merged
+- [ ] Release run on main green: vX.Y.Z tagged, GitHub Release has installer + packages + zip
 ```

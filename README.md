@@ -150,15 +150,9 @@ First run downloads the SDE (types, groups, packaged volumes, systems, stations,
 
 ## Install & auto-update
 
-Grab `ContractTracker-win-Setup.exe` from the latest [Release](../../releases) (or the installer artifact of any [Actions run](../../actions)) and run it — installs per-user, no admin. Installed copies check GitHub Releases on startup and every 6 hours; when a new version exists, an **⬆ update chip** appears in the header — one click downloads (delta packages when available) and restarts into the new version. Dev and portable-zip runs never self-update.
+Grab `ContractTracker-win-Setup.exe` from the latest [Release](../../releases) and run it — installs per-user, no admin. Installed copies check GitHub Releases on startup and every 6 hours; when a new version exists, an **⬆ update chip** appears in the header — one click downloads (delta packages when available) and restarts into the new version. Dev and portable-zip runs never self-update.
 
-Releasing a new version:
-
-```powershell
-.\scripts\release.ps1             # patch bump; or: minor | major | 1.4.0, -Watch to follow CI
-```
-
-The script bumps `<Version>` in the csproj, runs the tests, commits, tags `vX.Y.Z`, and pushes — CI builds, tests again, and publishes the installer, update packages, and a portable zip to the GitHub Release.
+Releasing is automatic: every PR merged to `main` becomes a new version. The [Release workflow](.github/workflows/release.yml) works out the version (`scripts/versioning/bump.py`: a `semver:*` label, else minor for a new `whats-new/features.json` entry, else patch), tests, builds and Velopack-packs it, and only then tags `vX.Y.Z` and publishes the installer, update packages and a portable zip to the GitHub Release. Each PR shows the version it would release in its "PR checks" run summary.
 
 ## Build from source
 

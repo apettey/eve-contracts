@@ -20,7 +20,8 @@ The rules file (`AGENTS.md`) wins over this skill if they disagree; update both 
 
 Porting to another repo: change this table, the review rules below it, the reviewer brief in
 `references/review-loop.md`, the commands in `references/checklist.md` and `.github/pull_request_template.md`, and the
-release section of `references/versioning-and-release.md`. Then grep the skill for `EveContracts`, `eve-contracts`, `ESI`
+release section of `references/versioning-and-release.md`, plus `.github/workflows/release.yml`, `pr-checks.yml` and the
+paths at the top of `scripts/versioning/bump.py`. Then grep the skill for `EveContracts`, `eve-contracts`, `ESI`
 and `dotnet` to catch anything left over.
 
 | Key | Value |
@@ -37,8 +38,8 @@ and `dotnet` to catch anything left over.
 | Artefact build | `dotnet publish src/EveContracts.App/EveContracts.App.csproj -c Release -r win-x64 --self-contained true -o publish` (PR CI does not publish or Velopack-pack) |
 | Release log | `changelog/` (index `changelog/README.md`) |
 | Announcement | `whats-new/features.json` · images `whats-new/img/pr-<N>-<name>.png`. The app has no in-app What's New yet, so these become the GitHub Release notes. |
-| Version source | `<Version>` in `src/EveContracts.App/EveContracts.App.csproj`; tags `vX.Y.Z` |
-| Release | **Manual for now:** after each merge, `.\scripts\release.ps1 <patch\|minor\|major>` from an up-to-date `main` (Windows/pwsh). The pushed tag runs `.github/workflows/release.yml`, which builds, Velopack-packs and publishes the GitHub Release. |
+| Version source | Tags `vX.Y.Z` only, computed by `scripts/versioning/bump.py` and built with `-p:Version`. The csproj `<Version>` stays `0.0.0-dev` and is never bumped |
+| Release | **Automatic on merge:** every push to `main` runs `.github/workflows/release.yml` (one run at a time): compute version → test, publish, Velopack-pack → tag + GitHub Release only after the artefact is built. PR "PR checks" summary shows `Merging this PR would release vX.Y.Z`. Manual run: `gh workflow run release.yml --ref main -f bump=<auto\|patch\|minor\|major>` |
 | Deploy | Installed copies auto-update from GitHub Releases (Velopack), so publishing the Release **is** the deploy. A release that doesn't deploy isn't possible today. |
 
 **Repo-specific review rules** (already in the reviewer brief):
@@ -76,13 +77,13 @@ Steps marked *(visible)* are for visible changes only. Steps 4, 6, 7, 8 and 9 ar
 8. **Review loop.** Follow `references/review-loop.md`. Spawn a fresh reviewer subagent with the diff, the intent and the checklist. Fix every finding, then re-review the *new* diff with the same reviewer (`SendMessage`). Repeat until a round has zero findings. Every later commit (rebase conflicts, retaken screenshots) gets reviewed too. Write `Review rounds: <n>, last one clean` into the PR body.
 9. **Merge, version, release.**
    - `gh pr ready <N>`; CI must be green.
-   - Merge only when the user approves: `gh pr merge <N> --squash`.
-   - Release right away, following `references/versioning-and-release.md`. The bump is the label if there is one, otherwise minor if the PR added an announcement entry, otherwise patch.
-   - Check that the tag, the Release and the installer exist, and report the version.
+   - Check the "PR checks" summary: `Merging this PR would release vX.Y.Z`. The bump is the label if there is one, otherwise minor if the PR added an announcement entry, otherwise patch. Wrong? Add a `semver:*` label.
+   - Merge only when the user approves: `gh pr merge <N> --squash`. Merging **is** releasing: the Release workflow on `main` builds and publishes the version (`references/versioning-and-release.md`).
+   - Watch that run; check that the tag, the Release and the installer exist, and report the version.
 
 ## References
 
 - `references/formats.md`: release-log template and index row, announcement JSON, PR body.
 - `references/review-loop.md`: reviewer brief ready to paste into a subagent.
-- `references/versioning-and-release.md`: bump rules, manual release, failed releases, what to automate next.
+- `references/versioning-and-release.md`: bump rules, how the automatic release runs, failed releases, what to automate next.
 - `references/checklist.md`: copy-paste checklist for the PR or your own tracking.
