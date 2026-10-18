@@ -85,7 +85,8 @@ jobs:
             assets=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
           fi
           if printf '%s\n' "$assets" | grep -q -- '-full\.nupkg$'; then
-            if ! printf '%s\n' "$assets" | grep -qx -- "ContractTracker-$VERSION-win-x64.zip"; then
+            # the reusable build's zip: <app-name>-<version>-<runtime>.zip
+            if ! printf '%s\n' "$assets" | grep -qE -- "-${VERSION//./\\.}-.+\.zip\$"; then
               echo "::error::$TAG is published but has no zip. Re-run only the failed jobs of the run that published it (gh run rerun <id> --failed), or attach the zip by hand."
               exit 1
             fi

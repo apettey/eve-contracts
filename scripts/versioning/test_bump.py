@@ -94,6 +94,16 @@ class Versions(unittest.TestCase):
         for b in ("patch", "minor", "major"):
             self.assertEqual(next_version(None, b), (1, 0, 0))
 
+    def test_number_version_steps_past_dangling_tags(self):
+        nv = bump.number_version
+        self.assertEqual(nv((1, 0, 0), (1, 0, 0), "minor"), (1, 1, 0))
+        self.assertEqual(nv((1, 0, 0), (1, 1, 0), "minor"), (1, 1, 1))
+        self.assertEqual(nv((1, 0, 0), (1, 0, 1), "minor"), (1, 1, 0))
+        self.assertEqual(nv((1, 0, 0), (2, 0, 0), "major"), (2, 0, 1))  # no 3.0.0 over-bump
+        self.assertEqual(nv((1, 0, 0), (2, 0, 0), "patch"), (2, 0, 1))
+        self.assertEqual(nv(None, (1, 0, 0), "patch"), (1, 0, 1))
+        self.assertEqual(nv(None, None, "minor"), (1, 0, 0))
+
     def test_unknown_bump_raises(self):
         with self.assertRaises(ValueError):
             next_version((1, 0, 0), "huge")
@@ -336,6 +346,26 @@ class GitRepo(unittest.TestCase):
         self.commit("Feature", {"b.cs": "1"}, pr=44, labels=["semver:minor"])
         p = plan_release("HEAD", self.lookup, published=lambda t: t != "v1.0.1")
         self.assertEqual(p.version, "1.1.0")  # above v1.0.1 already, no collision
+
+    def test_preview_matches_release_with_unpublished_tag(self):
+        self.commit("features", {F: features()})
+        self.tag("v1.0.0")
+        self.commit("Feature A", {F: features(50)}, pr=50)
+        self.tag("v1.1.0")  # its run failed before publishing
+        base = bump.git("rev-parse", "HEAD").strip()
+        self.commit("Feature B", {F: features(51, 50)}, pr=51)
+        pub = lambda t: t != "v1.1.0"
+        plan = plan_release("HEAD", self.lookup, published=pub)
+        old = bump.gh_published
+        bump.gh_published = lambda repo: pub
+        try:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                bump.main(["pr", "--base", base, "--head", "HEAD", "--repo", "o/r"])
+        finally:
+            bump.gh_published = old
+        o = dict(l.split("=", 1) for l in out.getvalue().splitlines())
+        self.assertEqual((plan.version, o["version"], o["latest"]), ("1.1.1", "1.1.1", "v1.0.0"))
 
     def test_rerun_of_superseded_tag_is_skipped(self):
         self.tag("v1.0.0")

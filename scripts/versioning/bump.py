@@ -71,6 +71,17 @@ def next_version(latest: Version | None, bump: str) -> Version:
     raise ValueError(f"unknown bump {bump!r}")
 
 
+def number_version(published: Version | None, highest: Version | None, bump: str) -> Version:
+    """The version to release: `bump` applied to the newest published version, but always above
+    every existing tag. A tag above the published one was left by a failed run and has already
+    used that bump's number, so step past it by a patch (published 1.0.0, dangling v1.1.0, minor
+    → 1.1.1: still a minor-level step for everyone on 1.0.0)."""
+    v = next_version(published, bump)
+    if highest is not None and v <= highest:
+        v = next_version(highest, "patch")
+    return v
+
+
 def feature_prs(text: str | None) -> set[int] | None:
     """PR numbers in a features.json text. A missing file is empty; an unparseable one is
     None (unknown), so a PR that repairs a broken file doesn't count every old entry as new.
@@ -292,11 +303,9 @@ def plan_release(head: str, lookup: PrLookup, force_bump: str = "",
         plan.bump = max_bump(c.decision.bump for c in plan.commits)
         plan.reason = (f"{len(plan.commits)} commits since {previous or 'the start'}, "
                        f"biggest bump wins: {plan.bump}")
-    version = next_version(latest, plan.bump)
-    if highest is not None and version <= highest:
-        # an unpublished tag (failed run) holds this number; never reuse or go below a tag
+    version = number_version(latest, highest, plan.bump)
+    if highest is not None and version != next_version(latest, plan.bump):
         unpublished = [t for t in tags if latest is None or parse_tag(t) > latest]
-        version = next_version(highest, "patch")
         plan.reason += f"; skips unpublished {', '.join(sorted(unpublished, key=parse_tag))}"
     elif latest is None and highest is None:
         plan.reason += f"; first release is {fmt(FIRST_VERSION)}"
@@ -399,6 +408,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base", required=True)
     p.add_argument("--head", required=True)
     p.add_argument("--labels", default="")
+    p.add_argument("--repo", help="owner/name: count only tags with a published Release, as the "
+                                  "release run does (default: every tag counts as published)")
 
     r = sub.add_parser("release", help="plan the release for a commit on main")
     r.add_argument("--head", default="HEAD")
@@ -418,10 +429,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if a.cmd == "pr":
-        latest = latest_version(git_tags())
+        published = gh_published(a.repo) if a.repo else (lambda t: True)
+        tags = sorted((t for t in git_tags() if parse_tag(t)), key=parse_tag, reverse=True)
+        latest = next((parse_tag(t) for t in tags if published(t)), None)
+        highest = parse_tag(tags[0]) if tags else None
         d = decide_bump(changed_paths(a.base, a.head), split_labels(a.labels),
                         show_file(a.base, FEATURES_PATH), show_file(a.head, FEATURES_PATH))
-        emit({"bump": d.bump, "version": fmt(next_version(latest, d.bump)), "reason": d.reason,
+        emit({"bump": d.bump, "version": fmt(number_version(latest, highest, d.bump)), "reason": d.reason,
               "latest": "v" + fmt(latest) if latest else ""})
         return 0
 

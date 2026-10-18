@@ -46,9 +46,11 @@ jobs:
       - name: Version preview
         if: github.event_name == 'pull_request'
         env:
+          GH_TOKEN: ${{ github.token }} # read Releases: only published tags count, as in release.yml
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
-          python3 scripts/versioning/bump.py pr --base HEAD^1 --head HEAD --labels "$LABELS" > preview.txt
+          python3 scripts/versioning/bump.py pr --base HEAD^1 --head HEAD --labels "$LABELS" \
+            --repo "$GITHUB_REPOSITORY" > preview.txt
           cat preview.txt
           version=$(sed -n 's/^version=//p' preview.txt)
           bump=$(sed -n 's/^bump=//p' preview.txt)

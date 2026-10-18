@@ -34,6 +34,6 @@ exists. Before, someone had to run `scripts/release.ps1` after each merge, and i
 - `ci.yml`: header comment only.
 - Docs: ship-change skill (`SKILL.md` Release/Version rows and step 9, `versioning-and-release.md`, checklist,
   formats), `AGENTS.md`, `README.md`, PR template.
-- No app code, settings or external calls changed. Written on macOS: the 60 versioning tests pass locally,
+- No app code, settings or external calls changed. Written on macOS: the 62 versioning tests pass locally,
   `actionlint` is clean, and `bump.py release` was dry-run against the real repo and API. The Windows build and the
   release workflow itself are proven by CI on this PR and by the release run when it merges.
