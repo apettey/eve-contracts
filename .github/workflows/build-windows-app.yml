@@ -81,6 +81,14 @@ on:
         required: false
         type: string
         default: ""
+      prerelease:
+        description: >-
+          Publish the Release as a prerelease. Velopack clients reading stable releases
+          don't update to it, which holds the deploy until it is promoted by hand
+          (gh release edit <tag> --prerelease=false).
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -193,6 +201,7 @@ jobs:
       # Creating it explicitly (instead of letting the Release create it) pins it to github.sha
       # even if main has moved on. An existing tag is reused only if it points at this commit.
       - name: Create tag (release-tag builds)
+        id: create-tag
         if: inputs.release-tag != ''
         shell: pwsh
         env:
@@ -209,6 +218,7 @@ jobs:
             gh api "repos/${{ github.repository }}/git/refs" -f "ref=refs/tags/$env:TAG" -f 'sha=${{ github.sha }}' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "could not create $env:TAG" }
             Write-Host "Created $env:TAG at ${{ github.sha }}"
+            "created=true" >> $env:GITHUB_OUTPUT
           }
 
       - name: Publish Velopack packages to release (tag builds)
@@ -227,9 +237,10 @@ jobs:
               exit 0
             }
           }
+          $pre = if ('${{ inputs.prerelease }}' -eq 'true') { @('--pre') } else { @() }
           vpk upload github --repoUrl 'https://github.com/${{ github.repository }}' `
             --token $env:GH_TOKEN `
-            --publish `
+            --publish @pre `
             --releaseName "${{ inputs.app-name }} $env:TAG" `
             --tag $env:TAG
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -245,9 +256,39 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG $env:ZIP_NAME --clobber --repo '${{ github.repository }}'
           } else {
-            gh release create $env:TAG $env:ZIP_NAME `
+            $pre = if ('${{ inputs.prerelease }}' -eq 'true') { @('--prerelease') } else { @() }
+            gh release create $env:TAG $env:ZIP_NAME @pre `
               --repo '${{ github.repository }}' `
               --title "${{ inputs.app-name }} $env:TAG" `
               --verify-tag `
               --generate-notes
           }
+
+      # Only a tag this run created, and only while no published Release exists for it: a
+      # failed publish then leaves no tag behind, so every tag has a Release. Once the Release
+      # is published the version has shipped and the tag stays.
+      - name: Remove tag after failed publish (release-tag builds)
+        if: failure() && steps.create-tag.outputs.created == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Drafts included (vpk upload drafts, uploads, then publishes). --jq prints one
+          # object per line across pages; plain --paginate would concatenate JSON arrays.
+          $lines = @(gh api --paginate "repos/${{ github.repository }}/releases" `
+            --jq '.[] | select(.tag_name == env.TAG) | {id, draft}')
+          if ($LASTEXITCODE -ne 0) { throw "Could not list releases; leaving tag $env:TAG for a human to check." }
+          $releases = @($lines | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+          if (@($releases | Where-Object { -not $_.draft }).Count) {
+            Write-Host "::warning::Release $env:TAG is published, so it has shipped; keeping the tag."
+            exit 0
+          }
+          foreach ($d in $releases) {
+            gh api -X DELETE "repos/${{ github.repository }}/releases/$($d.id)"
+            if ($LASTEXITCODE -ne 0) { throw "Could not delete draft release $($d.id) for $env:TAG." }
+            Write-Host "Deleted draft release $($d.id) for $env:TAG."
+          }
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Could not remove tag $env:TAG; delete it before the next release run." }
+          Write-Host "Removed tag $env:TAG: nothing was published, the next run will release these changes."
