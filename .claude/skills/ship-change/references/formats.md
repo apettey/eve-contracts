@@ -72,7 +72,8 @@ rebase right before `gh pr create`.
 | `description` | 1–3 sentences of plain text (no HTML), in the user's words: what it does and **where to find it**. `\n\n` starts a new paragraph. |
 | `images` | Optional, 1–2 `{ src, caption }`; the caption says where in the app the screenshot is. |
 
-Check it before pushing: `python3 -m json.tool whats-new/features.json >/dev/null` (or `Get-Content whats-new/features.json | ConvertFrom-Json`), plus unique `pr` numbers.
+Check it before pushing: `python3 scripts/versioning/validate_features.py` (the "PR checks" workflow runs the same
+check, plus "entries added by this PR use its number").
 
 ## PR body
 
