@@ -120,8 +120,9 @@ whether `main` has moved on since the failed commit (`git fetch && git log --one
     `gh run rerun <id> --failed` re-runs the zip upload or the notes; the build skips the Velopack upload it already
     did. A full re-run doesn't rebuild a shipped version; it re-applies the notes and fails if the zip is missing.
   - *version failed* (e.g. the GitHub API was down): `gh run rerun <id>`.
-- A shipped version whose zip can't be attached any more: attach it by hand or leave it; the installer and update
-  packages are what matter.
+- A shipped version whose zip is missing: attach it by hand (`gh release upload vX.Y.Z <zip>` from the build run's
+  artifacts). Until then the finalize check fails on every run for that commit; the installer and update packages
+  already work.
 
 ## Deploy
 

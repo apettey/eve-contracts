@@ -118,8 +118,8 @@ def state_messages(tag: str, st: ReleaseStatus, labels_prerelease: bool, build_r
                       "delete the draft and run the release workflow again on the default branch.")
     elif not st.zip:
         errors.append(f"{tag} has shipped but has no zip. Attach it by hand from the build run's "
-                      "artifacts (gh release upload), or leave it: the installer and update packages "
-                      "are what matter.")
+                      "artifacts (gh release upload); the notes are set, and this check fails on every "
+                      "run for this commit until the zip is there.")
     return summary, warnings, errors, shipped
 
 
