@@ -197,8 +197,32 @@ jobs:
           path: Releases/
           retention-days: 7
 
-      # release-tag mode only: the artefact now exists, so create the tag at the built commit,
-      # unless a higher vX.Y.Z already exists (a stale re-run; see the guard below).
+      # release-tag mode only. A re-run of an old release run keeps the version it computed back
+      # then, and a caller may try to finish an old orphaned tag. If a higher version has been
+      # released since, publishing this one would make older code GitHub's "Latest". Usually
+      # `vpk pack` already refuses (it downloads the latest stable release), but not when the
+      # newer release is a prerelease (deploy:manual hold) or that download failed, so check here,
+      # before tagging, on both the new-tag and the reuse-tag path. Only published Releases count
+      # (prereleases included, drafts not), so a stray tag with no Release can't block releases.
+      - name: Refuse a stale version (release-tag builds)
+        if: inputs.release-tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $released = @(gh api --paginate "repos/${{ github.repository }}/releases" --jq '.[] | select(.draft | not) | .tag_name')
+          if ($LASTEXITCODE -ne 0) { throw "could not list releases to check $env:TAG is the newest version" }
+          $mine = [version]($env:TAG -replace '^v')
+          $newer = @($released | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+            Where-Object { [version]($_ -replace '^v') -gt $mine } |
+            Sort-Object { [version]($_ -replace '^v') } -Descending)
+          if ($newer.Count) {
+            throw "$env:TAG is stale: $($newer[0]) is already released. This run's version predates it, so nothing is tagged or published. Start a fresh release run on the latest commit; if $env:TAG is an orphaned tag with no Release, delete it."
+          }
+          Write-Host "$env:TAG is above every released version."
+
+      # release-tag mode only: the artefact now exists, so create the tag at the built commit.
       # Creating it explicitly (instead of letting the Release create it) pins it to github.sha
       # even if main has moved on. An existing tag is reused only if it points at this commit.
       - name: Create tag (release-tag builds)
@@ -216,17 +240,6 @@ jobs:
             if ($commit -ne '${{ github.sha }}') { throw "$env:TAG already exists at $commit, not ${{ github.sha }}" }
             Write-Host "$env:TAG already points at ${{ github.sha }}; reusing it"
           } else {
-            # Stale-run guard: a re-run of an old release run (e.g. "re-run failed jobs") keeps the
-            # version it computed back then. If a newer release has shipped since, tagging now would
-            # publish older code as a new GitHub "Latest". Only ever tag above the highest vX.Y.Z.
-            $names = @(gh api --paginate "repos/${{ github.repository }}/tags" --jq '.[].name')
-            if ($LASTEXITCODE -ne 0) { throw "could not list tags to check $env:TAG is the newest version" }
-            $newer = @($names | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-              Where-Object { [version]($_ -replace '^v') -gt [version]($env:TAG -replace '^v') } |
-              Sort-Object { [version]($_ -replace '^v') } -Descending)
-            if ($newer.Count) {
-              throw "$env:TAG is stale: $($newer[0]) already exists. This run's version predates a newer release; start a fresh release run from the latest commit instead of re-running this one."
-            }
             gh api "repos/${{ github.repository }}/git/refs" -f "ref=refs/tags/$env:TAG" -f 'sha=${{ github.sha }}' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "could not create $env:TAG" }
             Write-Host "Created $env:TAG at ${{ github.sha }}"
