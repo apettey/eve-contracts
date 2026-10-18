@@ -17,7 +17,8 @@ PRs are exempt from the release-log check because they can't write an entry.
   repos with a PR-style merge commit. They run in the existing `unittest discover` step.
 - `.github/workflows/pr-checks.yml`: two new steps in `release-checks`. actionlint is pinned to 1.7.12 and the
   download is checked against its SHA-256. The release-log step gets the PR author through `env`, not
-  interpolated into `run:`.
+  interpolated into `run:`. Every check step now runs even if an earlier one failed (`!cancelled()`), so a missing
+  entry doesn't hide the version preview or the features validation.
 - Docs: `AGENTS.md`, ship-change `SKILL.md`, `versioning-and-release.md` (removed from "Automate next"),
   `checklist.md` and `formats.md` describe the new checks and the Dependabot exemption.
 - No app code, settings or external calls changed. Written on macOS: the versioning tests pass locally,

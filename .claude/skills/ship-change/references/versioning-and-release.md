@@ -68,10 +68,11 @@ Add a `semver:*` label; the check re-runs on label changes. The same workflow va
 (`scripts/versioning/validate_features.py`: valid JSON, required fields, unique `pr`, images exist, entries added by
 this PR use its number), fails a PR that adds no new `changelog/YYYY-MM-DD-<name>/README.md`
 (`scripts/versioning/check_changelog.py`; Dependabot PRs, author `dependabot[bot]`, are exempt and still release as a
-patch), lints every workflow with a pinned, checksum-verified actionlint, and runs the `scripts/versioning` tests. Don't merge with "PR checks" red. A broken `features.json` on
-`main` makes the bump script treat the file as unknown (patch, no announcement notes) until it is fixed. The repo
-has no required checks today; making `release-checks` and `build-test` required in branch protection would enforce
-this.
+patch), lints every workflow with a pinned, checksum-verified actionlint, and runs the `scripts/versioning` tests.
+Each check runs even if an earlier one failed, so the summary is always there. Don't merge with "PR checks" red. A
+broken `features.json` on `main` makes the bump script treat the file as unknown (patch, no announcement notes) until
+it is fixed. The repo has no required checks today; making `release-checks` and `build-test` required in branch
+protection would enforce this.
 
 **After merging:** watch the run and check the result:
 

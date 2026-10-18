@@ -1,6 +1,8 @@
 # Release checks for pull requests: the version this PR would release, the announcement file,
-# the PR's release-log entry, a lint of the workflows and the versioning scripts' own tests. Linux-only and separate from ci.yml, so a label change
-# (which can change the version) re-runs this in seconds without cancelling the Windows build.
+# the PR's release-log entry, a lint of the workflows and the versioning scripts' own tests.
+# Linux-only and separate from ci.yml, so a label change (which can change the version) re-runs
+# this in seconds without cancelling the Windows build. Every check step runs even when an
+# earlier one failed (!cancelled()), so one failure doesn't hide the others or the preview.
 name: PR checks
 
 on:
@@ -29,6 +31,7 @@ jobs:
 
       # Pinned version, checksum-verified. Bump both together (sha256 from the release's checksums.txt).
       - name: Lint workflows (actionlint)
+        if: ${{ !cancelled() }}
         env:
           ACTIONLINT_VERSION: "1.7.12"
           ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
@@ -43,13 +46,13 @@ jobs:
       # Every PR adds changelog/YYYY-MM-DD-<name>/README.md; Dependabot PRs are exempt.
       # HEAD is the PR merged into its base, so HEAD^1..HEAD is what the squash commit adds.
       - name: Release-log entry
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
         run: python3 scripts/versioning/check_changelog.py --base HEAD^1 --head HEAD --author "$AUTHOR"
 
       - name: Validate whats-new/features.json
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           PR: ${{ github.event.pull_request.number }}
         run: |
@@ -59,13 +62,13 @@ jobs:
             --base-file base-features.json --pr "$PR"
 
       - name: Validate whats-new/features.json
-        if: github.event_name != 'pull_request'
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         run: python3 scripts/versioning/validate_features.py whats-new/features.json
 
       # The checkout is the PR merged into its base, so HEAD^1 is the base and HEAD^1..HEAD is
       # exactly what the squash commit will contain.
       - name: Version preview
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           GH_TOKEN: ${{ github.token }} # read Releases: only published tags count, as in release.yml
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
