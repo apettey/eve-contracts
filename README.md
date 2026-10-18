@@ -152,7 +152,7 @@ First run downloads the SDE (types, groups, packaged volumes, systems, stations,
 
 Grab `ContractTracker-win-Setup.exe` from the latest [Release](../../releases) and run it — installs per-user, no admin. Installed copies check GitHub Releases on startup and every 6 hours; when a new version exists, an **⬆ update chip** appears in the header — one click downloads (delta packages when available) and restarts into the new version. Dev and portable-zip runs never self-update.
 
-Releasing is automatic: every PR merged to `main` becomes a new version. The [Release workflow](.github/workflows/release.yml) works out the version (`scripts/versioning/bump.py`: a `semver:*` label, else minor for a new `whats-new/features.json` entry, else patch), tests, builds and Velopack-packs it, and only then tags `vX.Y.Z` and publishes the installer, update packages and a portable zip to the GitHub Release. Each PR shows the version it would release in its "PR checks" run summary.
+Releasing is automatic: every PR merged to `main` becomes a new version. The [Release workflow](.github/workflows/release.yml) works out the version (the shared [`next-version`](.github/actions/next-version/action.yml) action, `scripts/versioning/bump.py`: a `semver:*` label, else minor for a new `whats-new/features.json` entry, else patch), tests, builds and Velopack-packs it, and only then tags `vX.Y.Z` and publishes the installer, update packages and a portable zip to the GitHub Release. Each PR shows the version it would release in its "PR checks" run summary.
 
 ## Build from source
 

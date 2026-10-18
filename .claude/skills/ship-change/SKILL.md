@@ -20,8 +20,10 @@ The rules file (`AGENTS.md`) wins over this skill if they disagree; update both 
 
 Porting to another repo: change this table, the review rules below it, the reviewer brief in
 `references/review-loop.md`, the commands in `references/checklist.md` and `.github/pull_request_template.md`, and the
-release section of `references/versioning-and-release.md`, plus `.github/workflows/release.yml`, `pr-checks.yml` and the
-paths at the top of `scripts/versioning/bump.py`. Then grep the skill for `EveContracts`, `eve-contracts`, `ESI`
+release section of `references/versioning-and-release.md`, plus `.github/workflows/release.yml` and `pr-checks.yml`.
+The versioning code is shared, not copied: another repo calls this repo's `next-version`, `finalize-release` and
+`validate-features` actions with its own paths as inputs (`references/versioning-and-release.md`, "Shared
+versioning"). Then grep the skill for `EveContracts`, `eve-contracts`, `ESI`
 and `dotnet` to catch anything left over.
 
 | Key | Value |
@@ -38,9 +40,10 @@ and `dotnet` to catch anything left over.
 | Artefact build | `dotnet publish src/EveContracts.App/EveContracts.App.csproj -c Release -r win-x64 --self-contained true -o publish` (PR CI does not publish or Velopack-pack) |
 | Release log | `changelog/` (index `changelog/README.md`) |
 | Announcement | `whats-new/features.json` · images `whats-new/img/pr-<N>-<name>.png`. The app has no in-app What's New yet, so these become the GitHub Release notes. |
-| Version source | Tags `vX.Y.Z` only, computed by `scripts/versioning/bump.py` and built with `-p:Version`. The csproj `<Version>` stays `0.0.0-dev` and is never bumped |
+| Version source | Tags `vX.Y.Z` only, computed by the shared `.github/actions/next-version` (`scripts/versioning/bump.py`, also used by hangarscope and multi-box) and built with `-p:Version`. The csproj `<Version>` stays `0.0.0-dev` and is never bumped |
+| Script tests | `python3 -m unittest discover -s scripts/versioning -v` (needed when `scripts/versioning/` or `.github/actions/` changes; a change there also changes hangarscope's and multi-box's releases, so dry-run it against them) |
 | Release | **Automatic on merge:** every push to `main` runs `.github/workflows/release.yml` (one run at a time): compute version → test, publish, Velopack-pack → tag + GitHub Release only after the artefact is built. PR "PR checks" summary shows `Merging this PR would release vX.Y.Z`. Manual run: `gh workflow run release.yml --ref main -f bump=<auto\|patch\|minor\|major>` |
-| Deploy | Installed copies auto-update from GitHub Releases (Velopack), so publishing the Release **is** the deploy. A release that doesn't deploy isn't possible today. |
+| Deploy | Installed copies auto-update from GitHub Releases (Velopack), so publishing the Release **is** the deploy. `deploy:manual` publishes it as a prerelease, which they ignore until promoted (`gh release edit vX.Y.Z --prerelease=false`). |
 
 **Repo-specific review rules** (already in the reviewer brief):
 - ESI etiquette: contract item lists are immutable and fetched **once per contract, ever**; list endpoints keep ETags; no polling faster than ESI's cache window; a new ESI/Fuzzwork call must be stated in the release log.
@@ -72,7 +75,7 @@ Steps marked *(visible)* are for visible changes only. Steps 4, 6, 7, 8 and 9 ar
    - Add the index row at the top of `changelog/README.md`, then `git push -u origin HEAD`.
    - `gh pr create --draft` with the body from `.github/pull_request_template.md`; this gives you `<N>`.
    - *(visible)* Add the entry at the top of `whats-new/features.json` with `"pr": <N>`, and copy or crop `after.png` to `whats-new/img/pr-<N>-<name>.png`.
-   - Visible **fix**, not a feature: add the `semver:patch` label, because an announcement entry defaults to minor.
+   - Visible **fix**, not a feature: add the `semver:patch` label, because an announcement entry defaults to minor. Needs a step before installed copies should update: `deploy:manual`.
    - Commit, push, and pin the PR-body image URLs to that commit's SHA (`https://raw.githubusercontent.com/apettey/eve-contracts/<sha>/changelog/...`).
 8. **Review loop.** Follow `references/review-loop.md`. Spawn a fresh reviewer subagent with the diff, the intent and the checklist. Fix every finding, then re-review the *new* diff with the same reviewer (`SendMessage`). Repeat until a round has zero findings. Every later commit (rebase conflicts, retaken screenshots) gets reviewed too. Write `Review rounds: <n>, last one clean` into the PR body.
 9. **Merge, version, release.**

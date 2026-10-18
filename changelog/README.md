@@ -6,6 +6,7 @@ new entry. Format: [`.claude/skills/ship-change/references/formats.md`](../.clau
 
 | Date | Change | Summary |
 | --- | --- | --- |
+| 2026-10-18 | [Shared release versioning](2026-10-18-shared-versioning/README.md) | Internal: one tested versioning implementation, exposed as actions that hangarscope and multi-box call; `deploy:manual` now publishes a prerelease |
 | 2026-10-18 | [Shared build refuses a stale version](2026-10-18-refuse-stale-release-version/README.md) | Internal: a re-run or an old orphaned tag can no longer publish older code once a newer version is released |
 | 2026-10-18 | [PR CI: actionlint and release-log check](2026-10-18-pr-ci-lint-changelog/README.md) | Internal: PR checks lint the workflows and fail a PR without a new release-log entry (Dependabot exempt) |
 | 2026-10-18 | [Prerelease input and tag cleanup](2026-10-18-release-prerelease-input/README.md) | Internal: build-windows-app.yml can publish a prerelease (to hold a deploy) and removes its tag if publishing fails |

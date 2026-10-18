@@ -1,0 +1,81 @@
+# After the shared build published a release: set its notes, check it is complete, and
+# optionally record it in a generated changelog and the csproj <Version> (multi-box).
+# One implementation: scripts/versioning/finalize.py (tests: scripts/versioning/test_finalize.py).
+#
+#   - uses: apettey/eve-contracts/.github/actions/finalize-release@main
+#     with:
+#       tag: ${{ needs.version.outputs.tag }}
+#       notes: ${{ needs.version.outputs.notes }}
+#
+# Needs contents: write. With changelog-file or version-file, run actions/checkout first: the
+# bookkeeping commit "Release vX.Y.Z: changelog and version" is pushed to `branch` with the
+# checkout's credentials, and next-version ignores it (pass the same files as its
+# bookkeeping-paths). Fails if the Release is a draft, lacks the Velopack packages or the zip.
+name: Finalize release
+description: Release notes, completeness check and optional CHANGELOG.md / <Version> bookkeeping.
+
+inputs:
+  tag:
+    description: vX.Y.Z
+    required: true
+  notes:
+    description: Release notes (next-version's notes output)
+    required: true
+  prerelease:
+    description: next-version's prerelease output (only used for warnings)
+    required: false
+    default: "false"
+  build-result:
+    description: needs.<build job>.result (success or skipped)
+    required: false
+    default: success
+  app-name:
+    description: The shared build's app-name, to find the zip
+    required: false
+    default: ""
+  runtime:
+    description: The shared build's runtime
+    required: false
+    default: win-x64
+  changelog-file:
+    description: Generated changelog to add a "## [X.Y.Z] - date" section to (empty = none)
+    required: false
+    default: ""
+  version-file:
+    description: csproj whose <Version> is raised to the release (empty = none)
+    required: false
+    default: ""
+  branch:
+    description: Branch the bookkeeping commit is pushed to
+    required: false
+    default: main
+  github-token:
+    description: Token with contents write
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Notes, state and bookkeeping
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        NOTES: ${{ inputs.notes }}
+        PRERELEASE: ${{ inputs.prerelease }}
+        BUILD_RESULT: ${{ inputs.build-result }}
+        APP_NAME: ${{ inputs.app-name }}
+        RUNTIME: ${{ inputs.runtime }}
+        CHANGELOG_FILE: ${{ inputs.changelog-file }}
+        VERSION_FILE: ${{ inputs.version-file }}
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+        printf '%s\n' "$NOTES" > "$RUNNER_TEMP/release-notes.md"
+        python3 "$GITHUB_ACTION_PATH/../../../scripts/versioning/finalize.py" \
+          --repo "$GITHUB_REPOSITORY" --tag "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" \
+          --prerelease "$PRERELEASE" --build-result "$BUILD_RESULT" \
+          --app-name "$APP_NAME" --runtime "$RUNTIME" \
+          --changelog-file "$CHANGELOG_FILE" --version-file "$VERSION_FILE" --branch "$BRANCH" \
+          --summary "$GITHUB_STEP_SUMMARY"

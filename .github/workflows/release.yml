@@ -1,15 +1,19 @@
 # Every merge to main is a release (see .claude/skills/ship-change/references/versioning-and-release.md).
 #
-#   plan   → scripts/versioning/bump.py decides vX.Y.Z from the merged PR (label, else a new
-#            whats-new/features.json entry = minor, else patch)
-#   build  → reusable build: test, publish, Velopack pack, THEN create the tag at this commit and
-#            publish the Release (installed copies auto-update from it, so this is the deploy)
-#   notes  → Release body from the PR(s), announcement entries and release-log links
+#   version  → the shared next-version action (.github/actions/next-version, the same code
+#              hangarscope and multi-box use) decides vX.Y.Z from the merged PR (label, else a
+#              new whats-new/features.json entry = minor, else patch) and writes the notes
+#   build    → reusable build: test, publish, Velopack pack, THEN create the tag at this commit and
+#              publish the Release (installed copies auto-update from it, so this is the deploy).
+#              deploy:manual publishes a prerelease, which installed copies ignore until promoted.
+#   finalize → the shared finalize-release action sets the Release body and checks the Release
+#              has the Velopack packages and the zip
 #
 # One run at a time, in merge order. GitHub keeps only the newest pending run per concurrency
 # group, so if merges outpace builds a pending run can be dropped; the next run then releases
 # everything since the last published tag in one version (biggest bump wins). Nothing is ever
-# skipped. Re-running a run whose commit is already tagged reuses that tag.
+# skipped. Re-running a run whose commit is already tagged reuses that tag; once its Release is
+# published, a re-run only re-applies the notes.
 name: Release
 
 on:
@@ -31,86 +35,37 @@ permissions:
   contents: read
 
 jobs:
-  plan:
+  version:
+    # A dispatch from another branch would tag and auto-update a commit that isn't on main.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read # PR labels/title for the merged commit
+      pull-requests: read # PR labels/title for the merged commits; a failed lookup fails the run
     outputs:
-      skip: ${{ steps.plan.outputs.skip }}
-      build: ${{ steps.shipped.outputs.build }}
-      version: ${{ steps.plan.outputs.version }}
-      tag: ${{ steps.plan.outputs.tag }}
-      notes: ${{ steps.plan.outputs.notes }}
+      release: ${{ steps.next.outputs.release }}
+      finalize: ${{ steps.next.outputs.finalize }}
+      version: ${{ steps.next.outputs.version }}
+      tag: ${{ steps.next.outputs.tag }}
+      prerelease: ${{ steps.next.outputs.prerelease }}
+      notes: ${{ steps.next.outputs.notes }}
     steps:
-      - name: Only main is released
-        if: github.ref != 'refs/heads/main'
-        env:
-          REF: ${{ github.ref }}
-        run: |
-          echo "::error::Releases are cut from main only (got $REF)"
-          exit 1
-
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # full history + tags: the version is computed from the latest vX.Y.Z
+          fetch-depth: 0 # full history + tags: the version is computed from the newest published vX.Y.Z
 
-      # Only tags whose Release has the Velopack packages count as released; a tag left by a
-      # failed run is skipped over and its commits go out with this release.
+      # This repo's own copy (same commit), so changes to it ship in lockstep. The other repos
+      # call apettey/eve-contracts/.github/actions/next-version@main.
       - name: Compute version
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUMP: ${{ inputs.bump || 'auto' }}
-        run: |
-          python3 scripts/versioning/bump.py release --head "$GITHUB_SHA" \
-            --repo "$GITHUB_REPOSITORY" --bump "$BUMP" > plan.txt
-          cat plan.txt
-          cat plan.txt >> "$GITHUB_OUTPUT"
-
-      # A re-run of a commit whose Release already has the Velopack packages has shipped: don't
-      # build again (re-packing an existing version fails), but still check the zip and re-apply
-      # the notes, so a green run means a complete Release.
-      - name: Already shipped?
-        id: shipped
-        if: steps.plan.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.plan.outputs.tag }}
-          VERSION: ${{ steps.plan.outputs.version }}
-          REUSED: ${{ steps.plan.outputs.reused }}
-        run: |
-          assets=""
-          if [ "$REUSED" = "true" ]; then
-            assets=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
-          fi
-          if printf '%s\n' "$assets" | grep -q -- '-full\.nupkg$'; then
-            # the reusable build's zip: <app-name>-<version>-<runtime>.zip
-            if ! printf '%s\n' "$assets" | grep -qE -- "-${VERSION//./\\.}-.+\.zip\$"; then
-              echo "::error::$TAG is published but has no zip. Re-run only the failed jobs of the run that published it (gh run rerun <id> --failed), or attach the zip by hand."
-              exit 1
-            fi
-            echo "$TAG is already published; only the notes are re-applied."
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Summary
-        env:
-          SKIP: ${{ steps.plan.outputs.skip }}
-          TAG: ${{ steps.plan.outputs.tag }}
-          REASON: ${{ steps.plan.outputs.reason }}
-        run: |
-          if [ "$SKIP" = "true" ]; then
-            echo "### No release: $REASON" >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '### Releasing %s\n\n%s\n' "$TAG" "$REASON" >> "$GITHUB_STEP_SUMMARY"
-          fi
+        id: next
+        uses: ./.github/actions/next-version
+        with:
+          bump: ${{ inputs.bump || 'auto' }}
+          app-name: ContractTracker
 
   build:
-    needs: plan
-    if: needs.plan.outputs.skip != 'true' && needs.plan.outputs.build == 'true'
+    needs: version
+    if: needs.version.outputs.release == 'true'
     # Same commit's copy of the reusable workflow, so changes to it ship in lockstep.
     uses: ./.github/workflows/build-windows-app.yml
     permissions:
@@ -120,25 +75,28 @@ jobs:
       app-name: ContractTracker
       test-project: tests/EveContracts.Tests/EveContracts.Tests.csproj
       main-exe: EveContracts.App.exe
-      version: ${{ needs.plan.outputs.version }}
-      release-tag: ${{ needs.plan.outputs.tag }}
+      version: ${{ needs.version.outputs.version }}
+      release-tag: ${{ needs.version.outputs.tag }}
+      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
 
-  notes:
-    needs: [plan, build]
-    # after a successful build, or when the plan found the Release already shipped
+  # Also runs when the build was skipped because the Release is already published (a re-run),
+  # so the notes are never silently left out.
+  finalize:
+    needs: [version, build]
     if: >-
-      always() && needs.plan.result == 'success' && needs.plan.outputs.skip != 'true' &&
-      (needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.plan.outputs.build == 'false'))
+      always() && needs.version.outputs.finalize == 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # gh release edit
     steps:
-      - name: Set Release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.plan.outputs.tag }}
-          NOTES: ${{ needs.plan.outputs.notes }}
-        run: |
-          printf '%s\n' "$NOTES" > notes.md
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
-          echo "Released [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v7 # the local action below lives in the repo
+
+      - name: Release notes and state
+        uses: ./.github/actions/finalize-release
+        with:
+          tag: ${{ needs.version.outputs.tag }}
+          notes: ${{ needs.version.outputs.notes }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          build-result: ${{ needs.build.result }}
+          app-name: ContractTracker

@@ -15,12 +15,13 @@
 ### Document
 - [ ] changelog/YYYY-MM-DD-<name>/README.md (+ before/after), saying what was and wasn't run
 - [ ] `python3 scripts/versioning/check_changelog.py --base origin/main` passes; workflow change: `actionlint` clean
+- [ ] `scripts/versioning/` or `.github/actions/` changed: script tests pass and a dry run against hangarscope and multi-box gives the expected versions
 
 ### Draft PR
 - [ ] Rebased on origin/main; index row at the top of changelog/README.md
 - [ ] Draft PR opened; visible change: whats-new/features.json entry with pr = <N> + whats-new/img/pr-<N>-*.png
 - [ ] PR body: what/why, before/after (SHA-pinned), release-log link, tests
-- [ ] semver:* label if the default is wrong (visible fix = semver:patch); deploy:manual if a manual step is needed
+- [ ] semver:* label if the default is wrong (visible fix = semver:patch); deploy:manual (prerelease, promote by hand) if a manual step is needed
 
 ### Review
 - [ ] Fresh reviewer subagent given the diff, intent, PR number and checklist
@@ -29,5 +30,5 @@
 
 ### Release
 - [ ] PR marked ready, CI green, "PR checks" says the expected vX.Y.Z, squash-merged
-- [ ] Release run on main green: vX.Y.Z tagged, GitHub Release has installer + packages + zip
+- [ ] Release run on main green: vX.Y.Z tagged, GitHub Release has installer + packages + zip (a prerelease with deploy:manual; promote once the manual step is done)
 ```
