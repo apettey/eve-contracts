@@ -1,0 +1,44 @@
+# Validates a repo's announcement file (whats-new/features.json), shared by eve-contracts,
+# hangarscope and multi-box. One implementation: scripts/versioning/validate_features.py.
+# Run after actions/checkout (fetch-depth: 0 when `base` is set).
+name: Validate announcements
+description: Check the announcement file's JSON, fields, unique PR numbers and images.
+
+inputs:
+  path:
+    description: The announcement file
+    required: false
+    default: whats-new/features.json
+  images-root:
+    description: Folder image `src` paths are relative to
+    required: false
+    default: .
+  image-prefix:
+    description: Every image `src` starts with this
+    required: false
+    default: whats-new/img/
+  base:
+    description: "PR base commit: entries added since it must use `pr` (empty = skip that check)"
+    required: false
+    default: ""
+  pr:
+    description: The PR number (with base)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Validate announcements
+      shell: bash
+      env:
+        FEATURES: ${{ inputs.path }}
+        IMAGES_ROOT: ${{ inputs.images-root }}
+        IMAGE_PREFIX: ${{ inputs.image-prefix }}
+        BASE: ${{ inputs.base }}
+        PR: ${{ inputs.pr }}
+      run: |
+        set -euo pipefail
+        args=("$FEATURES" --repo-root "$IMAGES_ROOT" --image-prefix "$IMAGE_PREFIX")
+        if [ -n "$BASE" ] && [ -n "$PR" ]; then args+=(--base-ref "$BASE" --pr "$PR"); fi
+        python3 "$GITHUB_ACTION_PATH/../../../scripts/versioning/validate_features.py" "${args[@]}"

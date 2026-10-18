@@ -100,6 +100,52 @@ class Validate(unittest.TestCase):
         # base without the file at all
         self.assertValid(doc(entry(11)), base_text="", pr=11)
 
+    def test_pr_repairing_a_broken_base_file_can_pass(self):
+        self.assertValid(doc(entry(10), entry(11)), base_text="{broken", pr=11)
+
+    def test_image_prefix_and_root_are_configurable(self):
+        # hangarscope: src is relative to docs/whats-new and starts with img/
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "img"))
+            open(os.path.join(root, "img/ok.png"), "wb").close()
+            img = lambda src: [{"src": src, "caption": "c"}]
+            self.assertValid(doc(entry(images=img("img/ok.png"))), repo_root=root, image_prefix="img/")
+            self.assertError(doc(entry(images=img("whats-new/img/ok.png"))), "under img/",
+                             repo_root=root, image_prefix="img/")
+
+
+class Cli(unittest.TestCase):
+    def test_base_ref_reads_the_base_file_with_git(self):
+        import subprocess
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+        import validate_features
+        with tempfile.TemporaryDirectory() as d:
+            old = os.getcwd()
+            os.chdir(d)
+            try:
+                for a in (["init", "-q"], ["config", "user.email", "t@e.com"], ["config", "user.name", "T"],
+                          ["config", "commit.gpgsign", "false"]):
+                    subprocess.run(["git", *a], check=True)
+                os.makedirs("whats-new")
+                with open("whats-new/features.json", "w") as f:
+                    f.write(doc(entry(10)))
+                subprocess.run(["git", "add", "-A"], check=True)
+                subprocess.run(["git", "commit", "-q", "-m", "base"], check=True)
+                with open("whats-new/features.json", "w") as f:
+                    f.write(doc(entry(12), entry(10)))
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    rc = validate_features.main(["whats-new/features.json", "--base-ref", "HEAD", "--pr", "11"])
+                self.assertEqual(rc, 1)
+                self.assertIn('use "pr": 11', err.getvalue())
+                self.assertIn("::error file=whats-new/features.json::", out.getvalue())
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    self.assertEqual(validate_features.main(
+                        ["whats-new/features.json", "--base-ref", "HEAD", "--pr", "12"]), 0)
+            finally:
+                os.chdir(old)
+
 
 if __name__ == "__main__":
     unittest.main()

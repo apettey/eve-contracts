@@ -1,0 +1,150 @@
+# The next release version, shared by eve-contracts, hangarscope and multi-box.
+# One implementation: scripts/versioning/bump.py (tests: scripts/versioning/test_bump.py).
+#
+# Used as a step after actions/checkout with fetch-depth: 0 (tags and history):
+#
+#   - uses: apettey/eve-contracts/.github/actions/next-version@main
+#     id: next
+#     with:
+#       features-path: whats-new/features.json
+#
+# The runner downloads this whole repository at the ref after the @, so the script that runs
+# is always the one from that same commit: no copy in the calling repo, no second checkout.
+#
+# Rules: a semver:* label wins (biggest), else a new announcement entry is minor, else patch;
+# major is never automatic; deploy:manual = prerelease; first release 1.0.0; several merges
+# since the newest published tag share one version (biggest bump). A failed PR lookup fails
+# the step. Needs a token with contents: read and pull-requests: read.
+name: Next release version
+description: Decide the next vX.Y.Z (and its release notes) for a release run or a PR preview.
+
+inputs:
+  mode:
+    description: "release (a push to the default branch) or pr (preview for a pull request)"
+    required: false
+    default: release
+  head:
+    description: "release: the commit to release. pr: the PR head or its test merge commit"
+    required: false
+    default: HEAD
+  base:
+    description: "pr only: the PR's base commit (github.event.pull_request.base.sha)"
+    required: false
+    default: ""
+  labels:
+    description: "pr only: the PR's labels as JSON (toJSON(github.event.pull_request.labels.*.name))"
+    required: false
+    default: "[]"
+  bump:
+    description: "release only: auto, or force patch|minor|major (backlog recovery)"
+    required: false
+    default: auto
+  features-path:
+    description: Announcement file whose new `pr` entries make a minor bump
+    required: false
+    default: whats-new/features.json
+  changelog-dir:
+    description: Release-log folder (<dir>/YYYY-MM-DD-name/README.md, index <dir>/README.md)
+    required: false
+    default: changelog
+  bookkeeping-paths:
+    description: >-
+      Files the release job's own "Release vX.Y.Z: ..." commit may touch (comma or newline
+      separated). Such commits never cause a release. Empty: any "Release vX.Y.Z" commit.
+    required: false
+    default: ""
+  app-name:
+    description: The shared build's app-name (zip <app-name>-<version>-<runtime>.zip)
+    required: false
+    default: ""
+  runtime:
+    description: The shared build's runtime
+    required: false
+    default: win-x64
+  notes-title:
+    description: "First line of the notes, e.g. '{app} {tag}' ({app} {version} {tag}). Empty: none"
+    required: false
+    default: ""
+  release-log-notes:
+    description: "summary (one linked line per release-log entry, from its index row) or full (the entry's text)"
+    required: false
+    default: summary
+  announcement-notes:
+    description: "sections ('### Title' and its text per new announcement) or list ('- **Title.** text (#N)')"
+    required: false
+    default: sections
+  github-token:
+    description: Token for PR and Release lookups
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  release:
+    description: "true: build and publish this version (release mode)"
+    value: ${{ steps.plan.outputs.release }}
+  finalize:
+    description: "true: write the notes (a new release, or a re-run of an already tagged commit)"
+    value: ${{ steps.plan.outputs.finalize }}
+  version:
+    description: X.Y.Z
+    value: ${{ steps.plan.outputs.version }}
+  tag:
+    description: vX.Y.Z
+    value: ${{ steps.plan.outputs.tag }}
+  bump:
+    description: patch, minor or major
+    value: ${{ steps.plan.outputs.bump }}
+  reason:
+    description: Why this bump
+    value: ${{ steps.plan.outputs.reason }}
+  prerelease:
+    description: "true when a PR in the release has deploy:manual"
+    value: ${{ steps.plan.outputs.prerelease }}
+  previous:
+    description: The newest published tag this release builds on (empty for the first)
+    value: ${{ steps.plan.outputs.previous }}
+  notes:
+    description: Release notes (Markdown; release mode)
+    value: ${{ steps.plan.outputs.notes }}
+  preview:
+    description: "pr mode: 'Merging this PR would release vX.Y.Z (...)'"
+    value: ${{ steps.plan.outputs.preview }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute version
+      id: plan
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.mode }}
+        HEAD_REF: ${{ inputs.head }}
+        BASE_REF: ${{ inputs.base }}
+        LABELS: ${{ inputs.labels }}
+        BUMP: ${{ inputs.bump }}
+        FEATURES_PATH: ${{ inputs.features-path }}
+        CHANGELOG_DIR: ${{ inputs.changelog-dir }}
+        BOOKKEEPING_PATHS: ${{ inputs.bookkeeping-paths }}
+        APP_NAME: ${{ inputs.app-name }}
+        RUNTIME: ${{ inputs.runtime }}
+        NOTES_TITLE: ${{ inputs.notes-title }}
+        RELEASE_LOG_NOTES: ${{ inputs.release-log-notes }}
+        ANNOUNCEMENT_NOTES: ${{ inputs.announcement-notes }}
+      run: |
+        set -euo pipefail
+        script="$GITHUB_ACTION_PATH/../../../scripts/versioning/bump.py"
+        common=(--repo "$GITHUB_REPOSITORY" --features-path "$FEATURES_PATH"
+          --changelog-dir "$CHANGELOG_DIR" --bookkeeping-paths "$BOOKKEEPING_PATHS"
+          --app-name "$APP_NAME" --runtime "$RUNTIME" --notes-title "$NOTES_TITLE"
+          --release-log-notes "$RELEASE_LOG_NOTES" --announcement-notes "$ANNOUNCEMENT_NOTES"
+          --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY")
+        case "$MODE" in
+          release)
+            python3 "$script" release "${common[@]}" --head "$HEAD_REF" --bump "$BUMP" ;;
+          pr)
+            if [ -z "$BASE_REF" ]; then echo "::error::mode: pr needs base"; exit 1; fi
+            python3 "$script" pr "${common[@]}" --base "$BASE_REF" --head "$HEAD_REF" --labels "$LABELS" ;;
+          *)
+            echo "::error::mode must be release or pr (got '$MODE')"; exit 1 ;;
+        esac
