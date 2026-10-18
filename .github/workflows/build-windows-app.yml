@@ -197,7 +197,8 @@ jobs:
           path: Releases/
           retention-days: 7
 
-      # release-tag mode only: the artefact now exists, so create the tag at the built commit.
+      # release-tag mode only: the artefact now exists, so create the tag at the built commit,
+      # unless a higher vX.Y.Z already exists (a stale re-run; see the guard below).
       # Creating it explicitly (instead of letting the Release create it) pins it to github.sha
       # even if main has moved on. An existing tag is reused only if it points at this commit.
       - name: Create tag (release-tag builds)
@@ -215,6 +216,17 @@ jobs:
             if ($commit -ne '${{ github.sha }}') { throw "$env:TAG already exists at $commit, not ${{ github.sha }}" }
             Write-Host "$env:TAG already points at ${{ github.sha }}; reusing it"
           } else {
+            # Stale-run guard: a re-run of an old release run (e.g. "re-run failed jobs") keeps the
+            # version it computed back then. If a newer release has shipped since, tagging now would
+            # publish older code as a new GitHub "Latest". Only ever tag above the highest vX.Y.Z.
+            $names = @(gh api --paginate "repos/${{ github.repository }}/tags" --jq '.[].name')
+            if ($LASTEXITCODE -ne 0) { throw "could not list tags to check $env:TAG is the newest version" }
+            $newer = @($names | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+              Where-Object { [version]($_ -replace '^v') -gt [version]($env:TAG -replace '^v') } |
+              Sort-Object { [version]($_ -replace '^v') } -Descending)
+            if ($newer.Count) {
+              throw "$env:TAG is stale: $($newer[0]) already exists. This run's version predates a newer release; start a fresh release run from the latest commit instead of re-running this one."
+            }
             gh api "repos/${{ github.repository }}/git/refs" -f "ref=refs/tags/$env:TAG" -f 'sha=${{ github.sha }}' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "could not create $env:TAG" }
             Write-Host "Created $env:TAG at ${{ github.sha }}"
