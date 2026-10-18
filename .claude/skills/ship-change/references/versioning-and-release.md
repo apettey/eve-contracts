@@ -149,7 +149,7 @@ This repo uses its own copies (`./.github/actions/...`, `./.github/workflows/...
 ships in lockstep. hangarscope and multi-box use `apettey/eve-contracts/.github/actions/<name>@main`: the runner
 downloads this repo at that ref, so the action always runs the scripts from the same commit. Per-repo differences are
 action inputs, not code: `features-path`, `changelog-dir`, `app-name`, `bookkeeping-paths`, `notes-title`,
-`release-log-notes` (`summary` or `full`), and on `finalize-release` `changelog-file`, `version-file` and `branch`.
+`release-log-notes` (`summary` or `full`), `announcement-notes` (`sections` or `list`), and on `finalize-release` `changelog-file`, `version-file` and `branch`.
 The branch name and merge style come from the caller's workflow (it decides which pushes run).
 
 **A change here changes three release pipelines.** Keep it backwards compatible (new inputs get defaults that keep

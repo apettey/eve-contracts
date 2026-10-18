@@ -69,6 +69,10 @@ inputs:
     description: "summary (one linked line per release-log entry, from its index row) or full (the entry's text)"
     required: false
     default: summary
+  announcement-notes:
+    description: "sections ('### Title' and its text per new announcement) or list ('- **Title.** text (#N)')"
+    required: false
+    default: sections
   github-token:
     description: Token for PR and Release lookups
     required: false
@@ -126,13 +130,14 @@ runs:
         RUNTIME: ${{ inputs.runtime }}
         NOTES_TITLE: ${{ inputs.notes-title }}
         RELEASE_LOG_NOTES: ${{ inputs.release-log-notes }}
+        ANNOUNCEMENT_NOTES: ${{ inputs.announcement-notes }}
       run: |
         set -euo pipefail
         script="$GITHUB_ACTION_PATH/../../../scripts/versioning/bump.py"
         common=(--repo "$GITHUB_REPOSITORY" --features-path "$FEATURES_PATH"
           --changelog-dir "$CHANGELOG_DIR" --bookkeeping-paths "$BOOKKEEPING_PATHS"
           --app-name "$APP_NAME" --runtime "$RUNTIME" --notes-title "$NOTES_TITLE"
-          --release-log-notes "$RELEASE_LOG_NOTES"
+          --release-log-notes "$RELEASE_LOG_NOTES" --announcement-notes "$ANNOUNCEMENT_NOTES"
           --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY")
         case "$MODE" in
           release)

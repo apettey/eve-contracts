@@ -62,6 +62,7 @@ class Config:
     runtime: str = "win-x64"
     notes_title: str = ""  # e.g. "{app} {tag}"; empty = no title line
     release_log_notes: str = "summary"  # summary: one linked line per entry; full: inline text
+    announcement_notes: str = "sections"  # sections: "### Title" + text; list: "- **Title.** text (#N)"
 
     @property
     def changelog_prefix(self) -> str:
@@ -181,7 +182,9 @@ def max_bump(bumps: Iterable[str]) -> str:
 
 
 def is_bookkeeping(subject: str, paths: Iterable[str], cfg: Config) -> bool:
-    """The release job's own commit: belongs to the release before it, never bumps again."""
+    """Looks like the release job's own commit (a "Release vX.Y.Z..." subject touching only the
+    bookkeeping files). collect() also requires that no merged PR produced it, so a squash-merged
+    PR titled "Release v2.0.0: ..." is still a change with its labels."""
     if not BOOKKEEPING_SUBJECT_RE.match(subject.strip()):
         return False
     if not cfg.bookkeeping_paths:
@@ -368,9 +371,9 @@ def collect(previous: str, head: str, cfg: Config, lookup: PrLookup) -> list:
         subject = git("log", "-1", "--format=%s", sha).strip()
         parent = first_parent(sha)
         paths = changed_paths(parent, sha)
-        if is_bookkeeping(subject, paths, cfg):
-            continue
         pr = lookup(sha)
+        if pr is None and is_bookkeeping(subject, paths, cfg):
+            continue
         d = decide_bump(paths, pr.labels if pr else [], show_file(parent, cfg.features_path),
                         show_file(sha, cfg.features_path), cfg.features_path)
         if pr is None:
@@ -412,6 +415,10 @@ def plan_release(head: str, cfg: Config, lookup: PrLookup, status: StatusLookup,
       published release already contains head.
     - head is already inside a later tag (an old run re-run after newer merges): skip; that
       release, or the next run, covers it. Never publish older code as the newest version.
+      Unpublished later tags count too: a newer run may be publishing one right now, and
+      releasing head above it would ship older code as the newest version. If that run died,
+      the next merge (or a dispatch on the default branch) releases everything since the
+      newest published tag, head included.
     - otherwise one release for every first-parent commit since the newest published tag,
       without bookkeeping commits. None left: nothing to release.
     """
@@ -441,7 +448,8 @@ def plan_release(head: str, cfg: Config, lookup: PrLookup, status: StatusLookup,
                     previous=previous, head=sha, changes=changes, reused_tag=True)
 
     if later:
-        return skip(f"{sha[:7]} is already part of {later[-1]}", sha)
+        return skip(f"{sha[:7]} is already part of {later[-1]} (a later run released it or is "
+                    "releasing it; a run on the newest commit covers anything unpublished)", sha)
 
     previous = newest_published(merged, status)
     changes = collect(previous, sha, cfg, lookup)
@@ -549,7 +557,13 @@ def release_notes(plan: Plan, cfg: Config, repo: str,
     if features:
         lines += ["## What's new", ""]
         for f in features:
-            lines += [f"### {str(f.get('title', '')).strip()}", "", str(f.get("description", "")).strip(), ""]
+            title, desc = str(f.get("title", "")).strip(), str(f.get("description", "")).strip()
+            if cfg.announcement_notes == "list":
+                lines.append(f"- **{title.rstrip('.')}.** {' '.join(desc.split())} (#{f.get('pr')})")
+            else:
+                lines += [f"### {title}", "", desc, ""]
+        if cfg.announcement_notes == "list":
+            lines.append("")
 
     if added is None:
         added = added_paths(plan.previous or EMPTY_TREE, sha)
@@ -651,12 +665,14 @@ def add_config_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--runtime", default=d.runtime)
     ap.add_argument("--notes-title", default="", help="first line of the notes; {app} {version} {tag}")
     ap.add_argument("--release-log-notes", default=d.release_log_notes, choices=["summary", "full"])
+    ap.add_argument("--announcement-notes", default=d.announcement_notes, choices=["sections", "list"])
 
 
 def config_from(a: argparse.Namespace) -> Config:
     return Config(features_path=a.features_path.strip("/"), changelog_dir=a.changelog_dir.strip("/"),
                   bookkeeping_paths=split_list(a.bookkeeping_paths), app_name=a.app_name,
-                  runtime=a.runtime, notes_title=a.notes_title, release_log_notes=a.release_log_notes)
+                  runtime=a.runtime, notes_title=a.notes_title, release_log_notes=a.release_log_notes,
+                  announcement_notes=a.announcement_notes)
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -690,10 +706,10 @@ def main(argv: Optional[list] = None) -> int:
     a = ap.parse_args(argv)
 
     if a.cmd == "next":
-        paths = (read_text(a.paths_file) or "") if a.paths_file else sys.stdin.read()
         latest = parse_tag(a.latest_tag) if a.latest_tag else None
         if a.latest_tag and latest is None:
             ap.error(f"--latest-tag {a.latest_tag!r} is not vX.Y.Z")
+        paths = (read_text(a.paths_file) or "") if a.paths_file else sys.stdin.read()
         labels = parse_labels(a.labels)
         d = decide_bump(paths.splitlines(), labels, read_text(a.features_before),
                         read_text(a.features_after), a.features_path)

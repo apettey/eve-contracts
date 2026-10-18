@@ -82,7 +82,9 @@ def validate(text: str, repo_root: str | None = None, base_text: str | None = No
         if "images" in e:
             errors += _check_images(at, e["images"], repo_root, image_prefix)
 
-    if pr is not None and base_text is not None:
+    # A broken base file can't tell old entries from new ones: skip that check (the PR that
+    # repairs it must be able to pass).
+    if pr is not None and base_text is not None and feature_prs(base_text) is not None:
         for n in sorted(set(seen) - feature_prs(base_text)):
             if n != pr:
                 errors.append(f"entry with \"pr\": {n} was added by PR #{pr}; use \"pr\": {pr}")

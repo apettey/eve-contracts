@@ -100,6 +100,9 @@ class Validate(unittest.TestCase):
         # base without the file at all
         self.assertValid(doc(entry(11)), base_text="", pr=11)
 
+    def test_pr_repairing_a_broken_base_file_can_pass(self):
+        self.assertValid(doc(entry(10), entry(11)), base_text="{broken", pr=11)
+
     def test_image_prefix_and_root_are_configurable(self):
         # hangarscope: src is relative to docs/whats-new and starts with img/
         with tempfile.TemporaryDirectory() as root:

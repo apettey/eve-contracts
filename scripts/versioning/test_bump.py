@@ -279,8 +279,13 @@ class NextCli(unittest.TestCase):
             self.assertEqual(o["bump"], "minor")
 
     def test_bad_latest_tag_is_an_error(self):
-        with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            bump.main(["next", "--latest-tag", "1.0"])
+        old = sys.stdin
+        sys.stdin = io.StringIO("")  # never wait on the real stdin
+        try:
+            with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                bump.main(["next", "--latest-tag", "1.0"])
+        finally:
+            sys.stdin = old
 
     def test_release_needs_repo_or_offline(self):
         with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -339,6 +344,11 @@ class Notes(unittest.TestCase):
         self.assertIn(f"![after](https://github.com/o/r/blob/{sha}/docs/changelog/2026-10-18-export/after.png?raw=true)", n)
         self.assertIn(f"[docs](https://github.com/o/r/blob/{sha}/docs/changelog/2026-10-18-export/../../README.md)", n)
         self.assertIn("[x](https://e.com)", n)
+
+    def test_announcements_as_a_list(self):
+        cfg = Config(announcement_notes="list")
+        n = bump.release_notes(self.plan(), cfg, "o/r", self.reader(cfg), added=[])
+        self.assertIn("## What's new\n\n- **Feature 21.** Does 21. (#21)\n\n## Pull requests", n)
 
     def test_entries_oldest_first_and_only_top_level_readmes(self):
         e = bump.release_log_entries(["changelog/2026-10-19-b/README.md", "changelog/2026-10-18-a/README.md",
@@ -543,6 +553,15 @@ class GitRepo(unittest.TestCase):
         p = self.plan()
         self.assertEqual(p.version, "1.1.0")
         self.assertEqual(len(p.changes), 1)
+
+    def test_pr_titled_like_a_release_commit_keeps_its_labels(self):
+        self.tag("v1.0.0")
+        self.commit("Release v2.0.0: new storage engine (#42)", {"a.cs": "1"}, pr=42,
+                    labels=["semver:major", "deploy:manual"])
+        p = self.plan()
+        self.assertEqual((p.version, p.prerelease), ("2.0.0", True))
+        self.commit("Release v2.0.0: changelog and version", {"CHANGELOG.md": "x"}, pr=43)
+        self.assertEqual([c.pr.number for c in self.plan(cfg=MB).changes], [42, 43])
 
     def test_only_legacy_commits_means_nothing_to_release(self):
         self.tag("v1.0.0")

@@ -17,6 +17,13 @@ use the same actions from the same commit.
   job's `Release vX.Y.Z: ...` bookkeeping commit is ignored; `deploy:manual` sets `prerelease`; a tagged commit
   whose Release is published only re-applies the notes (`release=false`, `finalize=true`); the PR preview includes
   unreleased merges already on `main`. Versions are still numbered above every existing tag.
+- Notes options for the other repos: `notes-title` (hangarscope's `# HangarScope vX.Y.Z`), `release-log-notes:
+  full` (hangarscope's inline entry text) and `announcement-notes: list` (multi-box's `- **Title.** text (#N)`).
+  hangarscope's "No release-log entry in this release. Commits:" fallback is replaced by the `## Pull requests`
+  list, which every release has.
+- A `Release vX.Y.Z...` commit counts as bookkeeping only if no merged PR produced it, so a squash-merged PR with
+  such a title keeps its labels.
+- The announcement validator no longer crashes when the base file is invalid JSON (the repairing PR can pass).
 - New `scripts/versioning/finalize.py`: sets the Release notes, fails on a draft or a Release without the Velopack
   packages or zip, warns on a prerelease state that doesn't match the labels, and (multi-box only) writes the
   generated `CHANGELOG.md` section and csproj `<Version>` in a bookkeeping commit.
@@ -27,7 +34,9 @@ use the same actions from the same commit.
   always come from the same commit as the action.
 - `release.yml`: jobs `version` / `build` / `finalize` on the shared actions. **Behaviour change:** `deploy:manual`
   now publishes a prerelease here too (it used to mean "do the manual step before merging"), matching the other two.
-  Release notes now also list the release-log entries' index summaries.
+  Release notes change shape: `## What's new` (new announcement entries), `## Changes` (release-log entries added
+  since the previous release, each linked with its index summary), `## Pull requests` (every PR or direct push) and
+  the compare link. The old `Bump: ...` line is gone from the notes (it is in the run summary instead).
 - `pr-checks.yml`: the features check and version preview use the shared actions (`pull-requests: read` added for
   the preview's lookups of unreleased merges).
 - Tests: the three former suites merged into `test_bump.py` (plus `test_finalize.py` and new validator cases),
