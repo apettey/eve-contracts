@@ -110,16 +110,20 @@ jobs:
             $version = $env:INPUT_VERSION
             $tag = "v$version"
             $release = 'true'
-            # A release is never overwritten: fail before building if the tag is taken, unless it
-            # is this commit's tag from an earlier run that failed before publishing (then finish it).
+            # A complete release is never overwritten: fail before building if the tag is taken,
+            # unless it is this commit's tag from an earlier run that failed before the release was
+            # complete (no release, a draft, or no zip yet - the zip is attached last). Then finish it.
             # The peeled "^{}" line (annotated tags) sorts after the tag line and holds the commit.
             $remote = @(git ls-remote --tags origin | Where-Object { $_ -match "\trefs/tags/$([regex]::Escape($tag))(\^\{\})?$" })
             if ($remote) {
               $tagSha = ($remote[-1] -split '\s+')[0]
               if ($tagSha -ne '${{ github.sha }}') { throw "Tag $tag already exists on origin at $tagSha." }
-              gh release view $tag --repo '${{ github.repository }}' 2>$null | Out-Null
-              if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists." }
-              Write-Host "Tag $tag is on this commit but has no release yet - finishing it."
+              $zip = "${{ inputs.app-name }}-$version-${{ inputs.runtime }}.zip"
+              $existing = gh release view $tag --repo '${{ github.repository }}' --json isDraft,assets 2>$null | ConvertFrom-Json
+              if ($LASTEXITCODE -eq 0 -and -not $existing.isDraft -and ($existing.assets.name -contains $zip)) {
+                throw "Release $tag already exists and is complete."
+              }
+              Write-Host "Tag $tag is on this commit but its release isn't complete - finishing it."
               $tagExists = 'true'
             }
             $global:LASTEXITCODE = 0
@@ -222,9 +226,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Finishing a release an earlier run started: add to it instead of failing on it.
+          $merge = @()
+          if ('${{ steps.version.outputs.tag-exists }}' -eq 'true') { $merge = @('--merge') }
           vpk upload github --repoUrl 'https://github.com/${{ github.repository }}' `
             --token $env:GH_TOKEN `
-            --publish `
+            --publish @merge `
             --releaseName '${{ inputs.app-name }} ${{ steps.version.outputs.tag }}' `
             --tag '${{ steps.version.outputs.tag }}'
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -250,6 +257,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit 1 }
             if ($env:RELEASE_NOTES) {
               gh release edit $env:TAG --notes-file $notesFile --repo '${{ github.repository }}'
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+            }
+            # A draft left by a failed earlier run of a version release: publish it now.
+            if ('${{ steps.version.outputs.tag-exists }}' -eq 'true') {
+              gh release edit $env:TAG --draft=false --repo '${{ github.repository }}'
             }
           } else {
             gh release create $env:TAG $env:ZIP_NAME `
